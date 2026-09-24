@@ -44,9 +44,31 @@ All runs pass USS and CPU gates; one earlier run (0.59%) failed CPU due to measu
 
 Thread count drops 11 → 8/9 after ~28 s (transient UI helper threads exit when minimized).
 
+## Thread isolation (budget 8 investigation)
+
+Measured 2026-09-24 with a temporary `--slint-only` probe (window, no engine, no cpal) and the CLI path (engine+cpal, no window). Named-thread attribution via `GetThreadDescription`; start-address → module map failed (snapshot returns empty under this sandbox). Counts are stable across repeated runs.
+
+| Configuration | Threads | Composition |
+|---|---|---|
+| A: Slint window only | **9** | main + softbuffer + ~7 Windows/winit/COM helpers (EventPairLow) |
+| B: CLI engine+cpal (no window) | **7** | main + `qpid-engine` + `cpal_wasapi_out` + ~4 COM/WASAPI helpers |
+| C: Full UI, no file | **10** | A + engine = 9 + 1 |
+| D: Full UI, playing (bench) | **11** | C + `cpal_wasapi_out` = 10 + 1 |
+
+**Subtraction:**
+
+- C − A = **1** → engine thread only (cpal stream not open until a file plays).
+- D − C = **1** → `cpal_wasapi_out` appears when playback starts.
+- App-owned threads we create: main, `qpid-engine`, `softbuffer_*` (Slint), `cpal_wasapi_out`, one UI event-drain (`ui.rs`). rfd dialog threads are transient (only while a file picker is open).
+- Remaining **EventPairLow** threads are Windows COM/RPC infrastructure spun up by winit and WASAPI — not application threads, not reducible without replacing the libraries.
+
+**Floor without our code:** Slint-only already sits at 9 (> 4). CLI (no Slint window) sits at 7 (> 4). Both library stacks independently exceed budget 8 before counting our three designed threads.
+
+**Verdict:** The budget of 4 assumed a minimal stack that does not match Slint+winit+cpal+Windows COM reality. Replacing the UI (§3.3) or cpal (Phase 6.3) would not reach 4 while still using either library's Windows backend. Recommend revising budget 8 to **12** with this measurement as the reason; keep the three-thread design for app-owned threads (§5) as the soft target. Decision pending user approval.
+
 ## Known failures / caveats
 
-1. **Thread budget FAIL (11 vs 4).** Named threads: main, `qpid-engine`, `softbuffer_*` (Slint renderer), `cpal_wasapi_out`, plus a UI event-drain thread and unnamed winit/Windows helpers. Architecture §5 allows 3 (+1 for Phase 5 pipe). Needs investigation before Phase 2 features (rule 18: fix budget failures before adding features).
+1. **Thread budget FAIL (11 vs 4)** — see isolation table above; floors are library-imposed.
 2. **`test.m4a` generation fails** (ffmpeg AAC experimental encoder). mp3/wav/flac/ogg OK.
 3. **Clicks on pause/seek:** not verifiable programmatically — human listening required (Phase 1 exit criteria §15).
 4. **Rate mismatch:** device is 48 kHz, test file 44.1 kHz; no resampler until Phase 2.

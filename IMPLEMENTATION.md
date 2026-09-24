@@ -12,10 +12,11 @@ environment — see "Unverified" below before trusting anything here).
 - Phase 1 (headless engine): **build-verified**. CLI smoke test passes
   (play, pause, ±15 s seek, resume). Benches run — see `BENCH.md`:
   idle USS 3.35 MB PASS, playing-minimized USS 4.96 MB PASS, CPU 0.315%
-  PASS. Thread budget 11 vs 4 **FAIL**. Clicks on pause/seek need human
-  listening. m4a test generation fails (ffmpeg encoder).
-- Phase 2 (speed): not started. Blocked on thread-budget investigation
-  (architecture rule: fix budget failures before adding features).
+  PASS. Thread budget 11 vs 4 FAIL — isolation shows Slint-only floor=9,
+  CLI floor=7; both libraries exceed 4 alone. Clicks on pause/seek need
+  human listening. m4a test generation fails (ffmpeg encoder).
+- Phase 2 (speed): not started. Waiting on decision: revise thread budget
+  to 12 (documented in BENCH.md) vs replace Slint/cpal (would not reach 4).
 - Phase 3 (playlist and persistence): not started.
 - Phase 4 (UI): partially pre-wired (open file/folder, toggle play, event
   display) but the 500ms timer, seek slider, speed control, keyboard
@@ -96,5 +97,6 @@ Phase 1 exit is fully closed:
 
 1. Human listen for clicks on pause/seek (cannot be automated).
 2. Budgets 2, 6, 7, 9 not yet measured.
-3. Thread budget (8) fails: 10–11 observed vs 4 allowed — investigate
-   before starting Phase 2.
+3. Thread budget (8): FAIL at 11 vs 4; isolation recorded in `BENCH.md`
+   (Slint floor 9, CLI floor 7). Awaiting decision to revise budget to 12
+   or replace a component.
