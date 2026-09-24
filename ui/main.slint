@@ -1,0 +1,246 @@
+import { Button, Slider, HorizontalBox, VerticalBox } from "std-widgets.slint";
+
+// -----------------------------------------------------------------------
+// Design tokens (section 10). Brand accent is green on near-black, per
+// project spec. Dark variant only for Phase 0/1 — light/dark theme
+// switching is added when the winit hook lands (Phase 4/5).
+// -----------------------------------------------------------------------
+global Tokens {
+    out property <color> bg: #0b0d0a;
+    out property <color> surface: #14170f;
+    out property <color> text-primary: #f2f5ef;
+    out property <color> text-muted: #8a9285;
+    out property <color> accent: #3ab814;
+    out property <color> accent-text: #0b0d0a;
+    out property <color> divider: #23281c;
+
+    out property <length> radius: 8px;
+    out property <length> button-height: 36px;
+    out property <length> hit-min: 40px;
+}
+
+component TransportButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <length> diameter: 40px;
+    callback clicked <=> area.clicked;
+
+    width: diameter;
+    height: diameter;
+    border-radius: primary ? self.width / 2 : Tokens.radius;
+    background: primary ? Tokens.accent : Tokens.surface;
+
+    area := TouchArea { }
+
+    Text {
+        text: label;
+        color: primary ? Tokens.accent-text : Tokens.text-primary;
+        font-size: primary ? 20px : 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+component SpeedSegment inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked <=> area.clicked;
+
+    height: 28px;
+    border-radius: 6px;
+    background: active ? Tokens.accent : transparent;
+
+    area := TouchArea { }
+
+    Text {
+        text: label;
+        color: active ? Tokens.accent-text : Tokens.text-muted;
+        font-size: 12px;
+        font-weight: active ? 600 : 400;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component MainWindow inherits Window {
+    title: "Q-pid";
+    background: Tokens.bg;
+    default-font-family: "Segoe UI Variable";
+
+    preferred-width: 480px;
+    preferred-height: 320px;
+    min-width: 400px;
+    min-height: 280px;
+
+    // ---- state exposed to Rust (ui.rs sets these; static defaults for Phase 0) ----
+    in property <string> folder-name: "";
+    in property <string> track-title: "";
+    in property <int> track-index: 0;
+    in property <int> track-count: 0;
+    in property <string> elapsed-text: "0:00";
+    in property <string> duration-text: "0:00";
+    in property <float> seek-fraction: 0.0;
+    in property <bool> is-playing: false;
+    in property <bool> has-track: false;
+    in property <string> status-text: "";
+    in property <int> speed-index: 1; // 0=0.5x 1=1x 2=1.25x 3=1.5x 4=2x
+
+    // ---- commands to Rust (Phase 4 wires these; no-ops in Phase 0/1) ----
+    callback open-file();
+    callback open-folder();
+    callback toggle-play();
+    callback seek-back();
+    callback seek-forward();
+    callback next-track();
+    callback prev-track();
+    callback set-speed(int);
+    callback seek-to(float);
+
+    VerticalBox {
+        padding: 20px;
+        spacing: 8px;
+
+        // Top row: open buttons
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+            alignment: start;
+
+            Rectangle {
+                width: 90px;
+                height: Tokens.button-height;
+                border-radius: Tokens.radius;
+                background: Tokens.surface;
+                border-width: 1px;
+                border-color: Tokens.divider;
+                TouchArea { clicked => { root.open-file(); } }
+                Text {
+                    text: "Open file";
+                    color: Tokens.text-primary;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                width: 100px;
+                height: Tokens.button-height;
+                border-radius: Tokens.radius;
+                background: Tokens.surface;
+                border-width: 1px;
+                border-color: Tokens.divider;
+                TouchArea { clicked => { root.open-folder(); } }
+                Text {
+                    text: "Open folder";
+                    color: Tokens.text-primary;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // Folder name
+        Text {
+            text: root.folder-name == "" ? "" : root.folder-name;
+            color: Tokens.text-muted;
+            font-size: 12px;
+            overflow: elide;
+            horizontal-alignment: left;
+        }
+
+        // Empty state / track title row
+        if !root.has-track: Text {
+            text: "Drop a folder or file here, or press Open";
+            color: Tokens.text-muted;
+            font-size: 14px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            height: 40px;
+        }
+
+        if root.has-track: HorizontalBox {
+            padding: 0px;
+            Text {
+                text: root.track-title;
+                color: Tokens.text-primary;
+                font-size: 18px;
+                font-weight: 600;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+            Text {
+                text: root.track-index + " / " + root.track-count;
+                color: Tokens.text-muted;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Seek row
+        HorizontalBox {
+            padding: 0px;
+            spacing: 8px;
+            Text {
+                text: root.elapsed-text;
+                color: Tokens.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+            Slider {
+                horizontal-stretch: 1;
+                minimum: 0;
+                maximum: 1000;
+                value: root.seek-fraction * 1000;
+                released(v) => { root.seek-to(v / 1000); }
+            }
+            Text {
+                text: root.duration-text;
+                color: Tokens.text-muted;
+                font-size: 11px;
+                vertical-alignment: center;
+            }
+        }
+
+        // Transport row
+        HorizontalBox {
+            padding: 0px;
+            spacing: 12px;
+            alignment: center;
+
+            TransportButton { label: "|<"; clicked => { root.prev-track(); } }
+            TransportButton { label: "-15"; clicked => { root.seek-back(); } }
+            TransportButton {
+                label: root.is-playing ? "||" : ">";
+                primary: true;
+                diameter: 56px;
+                clicked => { root.toggle-play(); }
+            }
+            TransportButton { label: "+15"; clicked => { root.seek-forward(); } }
+            TransportButton { label: ">|"; clicked => { root.next-track(); } }
+        }
+
+        // Speed row
+        HorizontalBox {
+            padding: 0px;
+            spacing: 4px;
+            alignment: center;
+
+            SpeedSegment { label: "0.5x"; active: root.speed-index == 0; clicked => { root.set-speed(0); } }
+            SpeedSegment { label: "1x";   active: root.speed-index == 1; clicked => { root.set-speed(1); } }
+            SpeedSegment { label: "1.25x";active: root.speed-index == 2; clicked => { root.set-speed(2); } }
+            SpeedSegment { label: "1.5x"; active: root.speed-index == 3; clicked => { root.set-speed(3); } }
+            SpeedSegment { label: "2x";   active: root.speed-index == 4; clicked => { root.set-speed(4); } }
+        }
+
+        // Status line
+        Text {
+            text: root.status-text;
+            color: Tokens.accent;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+    }
+}

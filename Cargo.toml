@@ -1,0 +1,54 @@
+[package]
+name = "qpid"
+version = "0.1.0"
+edition = "2021"
+default-run = "qpid"
+
+[[bin]]
+name = "qpid"
+path = "src/main.rs"
+
+[dependencies]
+slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+cpal = "0.15"
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "alac"] }
+rubato = "0.15"
+# signalsmith-stretch: added in Phase 2 (speed control). Verify crate name/version
+# with `cargo add signalsmith-stretch` on the target machine first — see
+# architecture.md section 4 note 4 for the SoundTouch/WSOLA fallback if it fails
+# to build (needs MSVC + cc). Not needed for Phase 0/1, which are 1x only.
+rtrb = "0.3"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+natord = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_Power",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Media_Audio",
+] }
+
+[build-dependencies]
+slint-build = "1"
+winresource = "0.1"
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.package."*"]
+opt-level = 3
+
+[profile.dev]
+# Keep dependency builds fast; app code itself is small.
+opt-level = 0
