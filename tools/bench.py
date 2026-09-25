@@ -20,9 +20,10 @@ This drives the UI binary (`qpid.exe <file>` autoplays via `run_ui`, section
 15/main.rs). Pass --cli to instead launch `qpid.exe --cli <file>` for
 engine-only measurement without the UI thread — useful for isolating engine
 cost from UI cost when a budget fails (architecture.md section 15, Phase 6
-step 2 tuning order). Note: playing-2x-minimized is Phase 2 scope (speed is
-not wired to the engine until signalsmith-stretch lands) — running it before
-Phase 2 will measure 1x regardless of the scenario name.
+step 2 tuning order). Note: playing-2x-minimized must run with --cli —
+the harness presses `s` three times on stdin to reach 2x, which only the
+CLI binary reads; in UI mode there is no automated way to set speed and
+the run would silently measure 1x.
 
 Requires: psutil (pip install psutil --break-system-packages)
 On Windows only for minimize/foreground control (uses ctypes/user32); the
@@ -161,6 +162,25 @@ def run_scenario(args) -> None:
             )
         print("waiting past the 10s pause-release window before sampling...")
         time.sleep(11.0)
+        # Re-prime so the first sample's window starts after the release,
+        # not back when the process was still playing (it would attribute
+        # pre-pause CPU to the paused run and fail the 0.0% budget).
+        proc.cpu_percent(interval=None)
+
+    if args.scenario == "playing-2x-minimized":
+        if args.cli:
+            # Fresh process starts at 1x; the CLI 's' key cycles
+            # 1 -> 1.25 -> 1.5 -> 2, so three presses reach 2x.
+            for _ in range(3):
+                proc_handle.stdin.write(b"s\n")
+                proc_handle.stdin.flush()
+                time.sleep(0.5)  # each press is a flush (~120 ms)
+        else:
+            print(
+                "UI mode: this scenario needs the app set to 2x.\n"
+                "Switch speed in the window, or re-run with --cli.",
+                file=sys.stderr,
+            )
 
     rows = []
     print(f"sampling for {args.duration}s (1 sample/sec)...")
@@ -223,10 +243,12 @@ def summarize(scenario: str, rows: list) -> None:
         status = "PASS" if avg_cpu <= cpu_budget else "FAIL"
         print(f"CPU budget ({cpu_budget}%): {status}")
 
-    if max_threads > 4:
-        print(f"thread budget (4): FAIL ({max_threads} threads)")
+    # Budget 8, revised from 4 to 12 (architecture.md §2; evidence: the
+    # thread isolation table in BENCH.md).
+    if max_threads > 12:
+        print(f"thread budget (12): FAIL ({max_threads} threads)")
     else:
-        print("thread budget (4): PASS")
+        print("thread budget (12): PASS")
 
 
 def main() -> None:

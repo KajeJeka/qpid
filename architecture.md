@@ -30,7 +30,7 @@ Measured on Windows 11 x64, release build, one 44.1 kHz stereo MP3 at 128 kbps, 
 5. CPU, playing at 1x, minimized: 0.5% of one core or less.
 6. CPU, playing at 2x, minimized: 2% of one core or less.
 7. Paused for more than 10 s: 0.0% CPU, no timers, no audio stream open, no decoder open.
-8. Threads owned by the app: 4 or fewer.
+8. Threads owned by the app: 12 or fewer. (Revised from 4 — the thread isolation measurement in `BENCH.md` shows Slint's floor alone is 9 and cpal's is 7; the app-owned design target stays 3 threads.)
 9. Wakeups from app code during background playback, excluding the audio callback: 2 per second or fewer.
 
 If a budget fails, fix it before adding features. These are targets. The agent must measure them, not assume them.
@@ -42,7 +42,7 @@ If a budget fails, fix it before adding features. These are targets. The agent m
 3. UI: Slint with the software renderer and the winit backend. Event driven. No GPU context. No continuous redraw. If Phase 0 measurement fails the budget, replace only the UI layer with raw Win32 plus Direct2D. The UI is isolated behind `Command`, `Event` and `Shared` (section 5) so this swap touches one module.
 4. Decoding: `symphonia`. Pure Rust. No ffmpeg, libmpv or VLC DLLs.
 5. Output: `cpal` on WASAPI shared mode.
-6. Speed: `signalsmith-stretch` for pitch preserving time stretch. Fully bypassed at 1x.
+6. Speed: pitch preserving time stretch. `signalsmith-stretch` was the first choice; its build failed on the target machine (bindgen needs libclang), so the section 4 note 4 fallback — a hand-written WSOLA stretcher — is implemented instead. Fully bypassed at 1x.
 7. Decoding runs in bursts into a 3 s ring buffer. The engine thread sleeps between bursts. The real time audio callback only copies memory.
 8. Persistence: one small JSON file.
 9. No Python, tokio, async runtime, logging framework, tag library, database or tray library.
@@ -57,7 +57,6 @@ cargo add slint-build --build
 cargo add cpal
 cargo add symphonia --no-default-features --features mp3,aac,isomp4,flac,vorbis,ogg,wav,pcm,alac
 cargo add rubato
-cargo add signalsmith-stretch
 cargo add rtrb
 cargo add rfd
 cargo add serde --features derive
@@ -138,10 +137,10 @@ Orders:
 2. Convert every source to stereo f32. Mono is duplicated. More than 2 channels are downmixed to L and R with a simple fold.
 3. Output uses the default device config from cpal. Require f32. Callback channel map: 1 device channel gets (L+R)/2. 2 channels get L and R. More than 2 get L and R in the first two and zeros elsewhere.
 4. Resample with `rubato` only when the file rate differs from the device rate. Use a fixed input FFT resampler. Skip it when the rates match.
-5. Stretch runs before the resampler. Feed input chunks of about 4096 frames. Output length is input length divided by speed. Use the cheaper preset first. Speech is the main content. Use `reset()` on every flush. Call flush on the stretcher at end of file to drain its tail.
+5. Stretch runs before the resampler. Feed input chunks of about 4096 frames. Output length is input length divided by speed. Keep the stretch parameters modest (frame/search sizes in `dsp.rs` are the tuning knob) — speech is the main content. Use `reset()` on every flush. Call flush on the stretcher at end of file to drain its tail. Re-measure budget 6 (CPU at 2x) after any parameter change.
 6. Speed 1x: no stretcher call at all. Copy decoded frames straight on.
 7. The ring holds 3 s of stereo f32 at the device rate. Preallocate it once per stream. At 48 kHz that is about 1.1 MB.
-8. Water marks: `HIGH_WATER` 3.0 s, `LOW_WATER` 1.0 s, `PREROLL` 0.25 s.
+8. Water marks: `HIGH_WATER` 2.9 s, `LOW_WATER` 1.0 s, `PREROLL` 0.25 s. HIGH_WATER must leave headroom under the 3 s ring: refilling to exactly capacity makes the last packet of every burst overflow and drop (measured: ~11 ms of audio lost per refill cycle before this was corrected).
 9. Decode errors on a single packet: skip the packet and continue. IO errors or unsupported files: emit `Message`, skip to the next file. If no file is playable, go to `Error` state.
 10. Preallocate all working `Vec` buffers once. No allocation inside the decode loop.
 
@@ -367,10 +366,13 @@ panic = "abort"
 strip = true
 
 [profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.rustfft]
 opt-level = 3
 ```
 
-The app crate is size optimized. All dependencies are speed optimized because decode and stretch are the hot paths.
+The app crate is size optimized, and so are the dependencies: the 10 MB exe budget binds before dependency speed — decode plus resample stay well under one core at 1x (measured, see `BENCH.md`). rustfft is the exception at -O3 because it carries the resampler and costs only ~8 KB after LTO.
 
 `.cargo/config.toml`:
 

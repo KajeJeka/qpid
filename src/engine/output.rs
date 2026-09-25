@@ -47,11 +47,11 @@ impl std::fmt::Display for OutputError {
 
 impl std::error::Error for OutputError {}
 
-/// Owns the cpal stream (when live) and the producer side of the ring.
-/// `None` stream means resources were released after the 10s pause window
-/// (section 8) or playback has not started yet; `is_live()` reflects this.
+/// Owns the cpal stream and the producer side of the ring. The whole struct
+/// is dropped by the section 8.2 pause release (stream, ring and all); the
+/// engine rebuilds it on resume.
 pub struct OutputStream {
-    stream: Option<Stream>,
+    stream: Stream,
     producer: Producer<f32>,
     ring_capacity_frames: usize,
     device_channels: usize,
@@ -60,11 +60,12 @@ pub struct OutputStream {
 
 impl OutputStream {
     /// Builds a new cpal stream at the device's default config, requiring
-    /// f32 samples, and wires the callback to `shared`. `source_rate` is
-    /// recorded into `shared.out_rate` by the caller before/after this call
-    /// once resampling (Phase 2) makes the two rates the same; for Phase 1
-    /// the device's own default rate is what actually plays.
-    pub fn build(source_rate: u32, shared: Arc<Shared>) -> Result<OutputStream, OutputError> {
+    /// f32 samples, and wires the callback to `shared`. Records the device's
+    /// rate into `shared.out_rate` — the rate everything downstream (ring
+    /// sizing, position math) must use once resampling makes source and
+    /// device rates the same. The caller reads `device_rate()` back to build
+    /// its resampler.
+    pub fn build(shared: Arc<Shared>) -> Result<OutputStream, OutputError> {
         let host = cpal::default_host();
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
 
@@ -124,10 +125,9 @@ impl OutputStream {
             .map_err(|e| OutputError::BuildStream(e.to_string()))?;
 
         shared.out_rate.store(device_rate, Ordering::Relaxed);
-        let _ = source_rate; // Phase 2 compares this against device_rate to decide resampling
 
         Ok(OutputStream {
-            stream: Some(stream),
+            stream,
             producer,
             ring_capacity_frames,
             device_channels,
@@ -136,26 +136,11 @@ impl OutputStream {
     }
 
     pub fn play(&mut self) {
-        if let Some(s) = &self.stream {
-            let _ = s.play();
-        }
+        let _ = self.stream.play();
     }
 
     pub fn pause(&mut self) {
-        if let Some(s) = &self.stream {
-            let _ = s.pause();
-        }
-    }
-
-    /// Section 8: drop the stream (and with it, all callback wakeups) after
-    /// 10s paused. The ring and its producer/consumer are also dropped by
-    /// replacing this whole struct on the next `build()` call from `resume`.
-    pub fn release(&mut self) {
-        self.stream = None;
-    }
-
-    pub fn is_live(&self) -> bool {
-        self.stream.is_some()
+        let _ = self.stream.pause();
     }
 
     /// Approximate ring fill in milliseconds, used by the engine loop to
@@ -174,12 +159,19 @@ impl OutputStream {
         self.ring_capacity_frames
     }
 
-    /// Pushes an interleaved stereo chunk into the ring. Called from the
-    /// engine thread only, never from the callback. If the ring is full
-    /// (should not happen given the water-mark discipline in `engine/mod.rs`),
-    /// remaining samples are dropped rather than blocking the engine thread.
-    pub fn push_frames(&mut self, frames: &super::decode::Frames) {
-        for &sample in &frames.data {
+    /// The rate the stream was actually opened at — the resampler's
+    /// device-side rate and the unit of all ring/position math.
+    pub fn device_rate(&self) -> u32 {
+        self.device_rate
+    }
+
+    /// Pushes interleaved stereo samples (already resampled to the device
+    /// rate) into the ring. Called from the engine thread only, never from
+    /// the callback. If the ring is full (should not happen given the
+    /// water-mark discipline in `engine/mod.rs`), remaining samples are
+    /// dropped rather than blocking the engine thread.
+    pub fn push_frames(&mut self, samples: &[f32]) {
+        for &sample in samples {
             if self.producer.push(sample).is_err() {
                 break; // ring full; drop the rest of this chunk
             }

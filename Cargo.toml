@@ -13,10 +13,6 @@ slint = { version = "1", default-features = false, features = ["std", "compat-1-
 cpal = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "alac"] }
 rubato = "0.15"
-# signalsmith-stretch: added in Phase 2 (speed control). Verify crate name/version
-# with `cargo add signalsmith-stretch` on the target machine first — see
-# architecture.md section 4 note 4 for the SoundTouch/WSOLA fallback if it fails
-# to build (needs MSVC + cc). Not needed for Phase 0/1, which are 1x only.
 rtrb = "0.3"
 rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
@@ -46,7 +42,16 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Dependencies are size-optimized: the exe-size budget (10 MB) binds harder
+# than dependency speed — decode/resample are far from saturating one core
+# at 1x (see architecture.md section 14; re-check the 2x CPU budget if this
+# ever regresses).
 [profile.release.package."*"]
+opt-level = "s"
+
+# FFT is the resampler's hot path and its size cost at -O3 is only ~8 KB
+# after LTO (measured), so keep it fast while everything else shrinks.
+[profile.release.package.rustfft]
 opt-level = 3
 
 [profile.dev]

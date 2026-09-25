@@ -8,18 +8,40 @@ environment — see "Unverified" below before trusting anything here).
 ## Status
 
 - Phase 0 (skeleton and measurement tooling): **build-verified**, release
-  build succeeds, exe size 9.74 MB (budget 10 MB).
+  build succeeds, exe size 9.89 MB (budget 10 MB; was 9.74 MB before the
+  resampler linked rustfft — see BENCH.md).
 - Phase 1 (headless engine): **build-verified**. CLI smoke test passes
-  (play, pause, ±15 s seek, resume). Benches run — see `BENCH.md`:
-  idle USS 3.35 MB PASS, playing-minimized USS 4.96 MB PASS, CPU 0.315%
-  PASS. Thread budget 11 vs 4 FAIL — isolation shows Slint-only floor=9,
-  CLI floor=7; both libraries exceed 4 alone. Clicks on pause/seek need
-  human listening. m4a test generation fails (ffmpeg encoder).
-- Phase 2 (speed): not started. Waiting on decision: revise thread budget
-  to 12 (documented in BENCH.md) vs replace Slint/cpal (would not reach 4).
+  (play, pause, ±15 s seek, resume, end-of-track). The 44.1/48 kHz
+  rate-mismatch pitch bug is fixed: real `rubato::FftFixedIn` resampler in
+  `src/engine/dsp.rs` with unit tests (TDD), wired through decode → resample
+  → ring, reset on every flush, EOF tail drained. Ring headroom drop fixed
+  (`HIGH_WATER` 3.0 → 2.9 s; was losing ~11 ms of audio per refill cycle).
+  Benches — see `BENCH.md`: exe 9.89 MB PASS, startup 141 ms PASS,
+  minimized USS 5.39 MB PASS, CPU 0.42% PASS, paused >10 s 0.00% PASS,
+  threads 11 ≤ revised budget 12 PASS. The §8.2 pause release now drops
+  stream, ring, decoder and resampler (whole context) and resume reopens
+  the file at the stored position — budget 7's "no decoder open, no
+  timers" clauses were failing before this. Clicks on pause/seek
+  and the resulting pitch need human listening. m4a test generation fails
+  (ffmpeg encoder).
+- Phase 2 (speed): **build-verified**. `signalsmith-stretch` resolved on
+  crates.io (v0.1.3) but failed to build (its `build.rs` runs bindgen
+  unconditionally and libclang is not installed), so the §4 note 4
+  fallback is implemented: a hand-written WSOLA stretcher in
+  `src/engine/dsp.rs` (TDD — 8 unit tests: bypass identity, output-length
+  ratio at 0.5/1.25/1.5/2x, Goertzel pitch preservation, reset
+  determinism). Wired decode → stretch → resample → ring; 1x is a pure
+  copy (§6.6 rule 6); `SetSpeed` is a flush-to-position (§7.1) capturing
+  the position under the old speed first; stretcher flushes before the
+  resampler at EOF; resets on every flush/seek. CLI `s` cycles the five
+  speeds; the Slint speed row is wired. Budget 6: 1.65–1.88% ≤ 2% (3 runs,
+  BENCH.md). Exe 9.90 MB (budget 10). Human checks pending: pitch by ear
+  at each speed, clicks on speed change (§16 test 4). Thread budget
+  revised to 12 in architecture.md §2.8 with the isolation evidence in
+  BENCH.md; Slint and cpal stay as-is.
 - Phase 3 (playlist and persistence): not started.
 - Phase 4 (UI): partially pre-wired (open file/folder, toggle play, event
-  display) but the 500ms timer, seek slider, speed control, keyboard
+  display, speed row) but the 500ms timer, seek slider, keyboard
   shortcuts, and minimize-driven timer suspension are NOT implemented.
   Do not consider Phase 4 started; this is scaffolding only.
 - Phase 5 (Windows integration): not started.
@@ -32,11 +54,12 @@ Windows, and no access to docs.rs/crates.io to confirm exact API shapes. The
 following are best-effort from written knowledge of each crate and MUST be
 checked against the actual compiler errors on first build:
 
-1. **`signalsmith-stretch` crate name/availability.** Commented out of
-   Cargo.toml entirely for Phase 0/1 (not needed until Phase 2). Run
-   `cargo add signalsmith-stretch` yourself and confirm it resolves before
-   starting Phase 2. If it fails, architecture.md section 4 note 4 names the
-   fallback (SoundTouch bindings or a ~150-line WSOLA stretcher).
+1. ~~**`signalsmith-stretch` crate name/availability.~~ RESOLVED:** the
+   crate resolves (v0.1.3) but does not build here — its `build.rs` runs
+   bindgen unconditionally and libclang is absent (only MSVC/cc
+   available), with no feature flag to skip it. Dependency removed from
+   Cargo.toml; the §4 note 4 fallback (hand-written WSOLA) is implemented
+   instead. Do not re-add it without libclang.
 2. **`rtrb` API surface** (`src/engine/output.rs`). The constructor name,
    whether `RingBuffer::new(capacity)` returns `(Producer<T>, Consumer<T>)`,
    and the method names `push`/`pop`/`slots`/`is_empty` are assumed from the
@@ -85,18 +108,26 @@ possible during authoring.
 - **UI wiring is ahead of spec in one direction, behind in another.** Open
   file/folder and toggle-play are wired now (Phase 4 scope) because they
   cost nothing to stub in Phase 0 and make the skeleton runnable end to end.
-  The 500ms timer, seek slider commit, speed control, and keyboard shortcuts
-  are explicitly NOT wired, since they depend on Phase 2/3 engine features
-  that don't exist yet — wiring them now would create UI that lies about
-  what the engine can do.
+  The speed row is wired as of Phase 2 (the engine's SetSpeed is real). The
+  500ms timer, seek slider commit, and keyboard shortcuts are explicitly
+  NOT wired, since they depend on features that don't exist yet — wiring
+  them now would create UI that lies about what the engine can do.
+- **Stretcher is a hand-written WSOLA, not `signalsmith-stretch` (§4.6
+  first choice).** The crate's build requires libclang (bindgen in its
+  build.rs, unconditional), which is not installed. §4 note 4 explicitly
+  sanctions "write a WSOLA stretcher (about 150 lines)" as the fallback;
+  that is what `src/engine/dsp.rs` implements.
 
 ## Measurement status
 
 Numbers for the measured budgets are in `BENCH.md`. Remaining before
 Phase 1 exit is fully closed:
 
-1. Human listen for clicks on pause/seek (cannot be automated).
-2. Budgets 2, 6, 7, 9 not yet measured.
-3. Thread budget (8): FAIL at 11 vs 4; isolation recorded in `BENCH.md`
-   (Slint floor 9, CLI floor 7). Awaiting decision to revise budget to 12
-   or replace a component.
+1. Human listen for clicks on pause/seek (cannot be automated), plus
+   Phase 2 listening: pitch at each speed and clicks on speed change
+   (§16 test 4).
+2. Budget 9 (wakeups/s) not yet measured — needs per-thread wakeup
+   tooling.
+3. Budgets 1–8 all PASS. Thread budget (8) was measured FAIL at 11 vs 4;
+   isolation recorded in `BENCH.md` (Slint floor 9, CLI floor 7) and the
+   budget was revised to **12** in architecture.md §2.8.

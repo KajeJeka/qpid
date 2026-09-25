@@ -4,11 +4,10 @@
 //!
 //! Phase 0/1 scope: enough wiring to open a file/folder and toggle play so
 //! the skeleton is visually operable, plus displaying events as they arrive.
-//! The 500ms position timer, full transport (seek, next/prev, speed),
-//! keyboard shortcuts, and minimize/occlusion timer suspension are all
-//! Phase 4 scope (section 15) and are NOT implemented here yet — wiring
-//! them now would be building ahead of the engine features (speed, playlist)
-//! that Phase 2/3 have not landed.
+//! Phase 2 added the speed row (the engine's SetSpeed is live). The 500ms
+//! position timer, seek slider, keyboard shortcuts, and minimize/occlusion
+//! timer suspension are Phase 4 scope (section 15) and are NOT implemented
+//! here yet.
 
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -89,11 +88,21 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
             let _ = cmd_tx.send(Command::SeekAbsolute(0));
         });
     }
-    window.on_set_speed(move |_index| {
-        // Phase 2 scope: signalsmith-stretch is not wired yet. Intentionally
-        // not sending SetSpeed here so the UI does not claim a feature the
-        // engine cannot yet perform correctly (section 3.6, 6.6).
-    });
+    {
+        let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
+        window.on_set_speed(move |index| {
+            // Phase 2: the engine flushes to position with the new speed
+            // (section 7.1), so this is safe to send at any time. Indices
+            // match Speed::from_index (0=0.5x .. 4=2x).
+            let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
+                index as u32,
+            )));
+            if let Some(window) = weak.upgrade() {
+                window.set_speed_index(index);
+            }
+        });
+    }
 
     let _ = shared; // Phase 4 wires the 500ms position timer against this.
 

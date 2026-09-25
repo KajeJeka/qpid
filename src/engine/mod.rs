@@ -3,10 +3,10 @@
 //! `Command` (in), `Event` (out) and `Shared` (lock-free position/state
 //! atomics polled by the UI timer).
 //!
-//! Phase 0/1 scope: OpenPath, Play, Pause, TogglePlay, SeekRelative,
-//! SeekAbsolute, Shutdown, and the flush/pause/release protocol at 1x only.
-//! Next/Prev/SetSpeed are accepted but are no-ops beyond what single-file
-//! playback needs until Phase 2/3 land.
+//! Scope: OpenPath, Play, Pause, TogglePlay, SeekRelative, SeekAbsolute,
+//! SetSpeed (Phase 2: WSOLA stretcher through the flush path), Shutdown,
+//! and the flush/pause/release protocol. Next/Prev are accepted but are
+//! no-ops beyond what single-file playback needs until Phase 3 lands.
 
 pub mod decode;
 pub mod dsp;
@@ -19,6 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use self::decode::Decoder;
+use self::dsp::{Resampler, Stretcher};
 use self::output::OutputStream;
 
 // ---------------------------------------------------------------------
@@ -56,6 +57,18 @@ impl Speed {
             2 => Speed::X1_25,
             3 => Speed::X1_5,
             _ => Speed::X2,
+        }
+    }
+
+    /// Inverse of `as_milli` for restoring the saved speed (shared ->
+    /// stretcher on reopen); unknown values fall back to 1x.
+    pub fn from_milli(m: u32) -> Speed {
+        match m {
+            500 => Speed::X0_5,
+            1250 => Speed::X1_25,
+            1500 => Speed::X1_5,
+            2000 => Speed::X2,
+            _ => Speed::X1,
         }
     }
 }
@@ -148,8 +161,11 @@ impl Shared {
     }
 }
 
-// Water marks (section 6.8), in milliseconds.
-const HIGH_WATER_MS: u64 = 3000;
+// Water marks (section 6.8), in milliseconds. HIGH_WATER must stay below
+// the 3 s ring capacity: refilling to exactly capacity means the last
+// packet of every burst overshoots and gets dropped (measured: ~11 ms of
+// audio lost per refill cycle before the 100 ms headroom was added).
+const HIGH_WATER_MS: u64 = 2900;
 const LOW_WATER_MS: u64 = 1000;
 const PREROLL_MS: u64 = 250;
 const PAUSE_RELEASE: Duration = Duration::from_secs(10);
@@ -158,8 +174,9 @@ const CHUNK_FRAMES: usize = 4096;
 struct PlaybackContext {
     decoder: Decoder,
     output: OutputStream,
-    #[allow(dead_code)] // consumed by Phase 3 playlist navigation
-    path: PathBuf,
+    stretcher: Stretcher,
+    resampler: Resampler,
+    path: PathBuf, // kept across a section 8.2 release to reopen at resume
 }
 
 /// Engine thread entry point. Owns everything real-time-adjacent.
@@ -171,6 +188,9 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     let mut state = PlayState::Idle;
     let mut ctx: Option<PlaybackContext> = None;
     let mut paused_since: Option<std::time::Instant> = None;
+    // Set by the 10 s pause release (section 8.2): the only thing kept of
+    // the context besides the resume position already in `shared.base_ms`.
+    let mut released_path: Option<PathBuf> = None;
 
     loop {
         let wait = match state {
@@ -186,8 +206,12 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     Duration::from_millis(until_low.clamp(100, 2000))
                 }
             }
-            PlayState::Paused => PAUSE_RELEASE,
-            PlayState::Idle | PlayState::Ended | PlayState::Error => Duration::from_secs(3600),
+            // Released (ctx taken): no timer — only a command wakes us,
+            // which is what budget 7 ("no timers") asks for after 10 s.
+            PlayState::Paused if ctx.is_some() => PAUSE_RELEASE,
+            PlayState::Idle | PlayState::Ended | PlayState::Error | PlayState::Paused => {
+                Duration::from_secs(3600)
+            }
         };
 
         match rx.recv_timeout(wait) {
@@ -197,6 +221,7 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &mut state,
                     &mut ctx,
                     &mut paused_since,
+                    &mut released_path,
                     &shared,
                     &tx_events,
                 ) {
@@ -204,7 +229,14 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                on_timeout(&mut state, &mut ctx, &mut paused_since, &shared, &tx_events);
+                on_timeout(
+                    &mut state,
+                    &mut ctx,
+                    &mut paused_since,
+                    &mut released_path,
+                    &shared,
+                    &tx_events,
+                );
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -223,7 +255,15 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                 None
             };
             if let Some(cmd) = pending {
-                if !handle_command(cmd, &mut state, &mut ctx, &mut paused_since, &shared, &tx_events) {
+                if !handle_command(
+                    cmd,
+                    &mut state,
+                    &mut ctx,
+                    &mut paused_since,
+                    &mut released_path,
+                    &shared,
+                    &tx_events,
+                ) {
                     break; // Shutdown
                 }
             }
@@ -237,6 +277,7 @@ fn handle_command(
     state: &mut PlayState,
     ctx: &mut Option<PlaybackContext>,
     paused_since: &mut Option<std::time::Instant>,
+    released_path: &mut Option<PathBuf>,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
 ) -> bool {
@@ -244,12 +285,19 @@ fn handle_command(
         Command::Shutdown => return false,
 
         Command::OpenPath(path) => {
-            open_path(path, state, ctx, paused_since, shared, tx_events);
+            open_path(path, state, ctx, paused_since, shared, tx_events, 0);
         }
 
         Command::Play => {
             if *state == PlayState::Paused {
-                resume(ctx, state, paused_since, shared, tx_events);
+                resume(
+                    ctx,
+                    state,
+                    paused_since,
+                    released_path,
+                    shared,
+                    tx_events,
+                );
             } else if *state == PlayState::Ended {
                 if let Some(c) = ctx.as_mut() {
                     flush_playing(c, 0, shared);
@@ -268,7 +316,7 @@ fn handle_command(
         Command::TogglePlay => {
             match *state {
                 PlayState::Playing => pause(ctx, state, paused_since, shared, tx_events),
-                PlayState::Paused => resume(ctx, state, paused_since, shared, tx_events),
+                PlayState::Paused => resume(ctx, state, paused_since, released_path, shared, tx_events),
                 _ => {}
             }
         }
@@ -296,11 +344,19 @@ fn handle_command(
         }
 
         Command::SetSpeed(speed) => {
-            // Phase 1: store the value so position math stays correct; the
-            // actual stretcher bypass/engage is Phase 2 scope.
+            // Section 7.1: a speed change is a flush to the current
+            // position with the new speed — never a live parameter tweak.
+            // Capture the position under the OLD speed first: position_ms
+            // multiplies played_frames by speed_milli, so storing first
+            // would jump the position (e.g. double it going 1x -> 2x).
+            let cur = shared.position_ms();
             shared.speed_milli.store(speed.as_milli(), Ordering::Relaxed);
-            if *state == PlayState::Playing {
-                let cur = shared.position_ms();
+            shared.base_ms.store(cur, Ordering::Relaxed);
+            shared.played_frames.store(0, Ordering::Relaxed);
+            if let Some(c) = ctx.as_mut() {
+                c.stretcher.set_speed(speed);
+            }
+            if matches!(*state, PlayState::Playing | PlayState::Paused) {
                 seek_to(cur, ctx, state, shared);
             }
         }
@@ -314,12 +370,22 @@ fn seek_to(
     state: &mut PlayState,
     shared: &Arc<Shared>,
 ) {
-    let Some(c) = ctx.as_mut() else { return };
     let dur = shared.duration_ms.load(Ordering::Relaxed);
     let clamped = if dur > 0 {
         target_ms.min(dur.saturating_sub(1000))
     } else {
         target_ms
+    };
+
+    let Some(c) = ctx.as_mut() else {
+        // Released after the 10s pause window (section 8.2): no decoder to
+        // move, just record where to resume from — `resume` reopens the
+        // file and seeks there.
+        if matches!(*state, PlayState::Paused | PlayState::Ended) {
+            shared.base_ms.store(clamped, Ordering::Relaxed);
+            shared.played_frames.store(0, Ordering::Relaxed);
+        }
+        return;
     };
 
     match *state {
@@ -333,6 +399,8 @@ fn seek_to(
             if let Err(e) = c.decoder.seek(clamped) {
                 let _ = e; // Phase 1: swallow; Phase 3 surfaces via Event::Message
             }
+            c.stretcher.reset(); // no stale samples from before the seek
+            c.resampler.reset(); // no stale samples from before the seek
         }
         _ => {}
     }
@@ -345,6 +413,7 @@ fn open_path(
     paused_since: &mut Option<std::time::Instant>,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
+    resume_ms: u64, // 0 on a fresh open; a resume-after-release position
 ) {
     *paused_since = None;
 
@@ -364,19 +433,31 @@ fn open_path(
 
     match Decoder::open(&file_path) {
         Ok(decoder) => {
-            let out_rate = decoder.sample_rate();
-            shared.out_rate.store(out_rate, Ordering::Relaxed);
+            let source_rate = decoder.sample_rate();
             shared
                 .duration_ms
                 .store(decoder.duration_ms().unwrap_or(0), Ordering::Relaxed);
-            shared.base_ms.store(0, Ordering::Relaxed);
+            shared.base_ms.store(resume_ms, Ordering::Relaxed);
             shared.played_frames.store(0, Ordering::Relaxed);
             shared.eof.store(false, Ordering::Relaxed);
             shared.drained.store(false, Ordering::Relaxed);
             shared.set_gain(1.0);
 
-            match OutputStream::build(out_rate, Arc::clone(shared)) {
+            match OutputStream::build(Arc::clone(shared)) {
                 Ok(output) => {
+                    let device_rate = output.device_rate();
+                    let resampler = Resampler::new(source_rate, device_rate);
+                    let mut stretcher = Stretcher::new();
+                    stretcher.set_speed(Speed::from_milli(
+                        shared.speed_milli.load(Ordering::Relaxed),
+                    ));
+                    if cfg!(debug_assertions) {
+                        eprintln!(
+                            "[diag] source_rate={source_rate} device_rate={device_rate} channels={} resampler={}",
+                            output.device_channels(),
+                            if resampler.is_bypassed() { "bypass" } else { "engaged" }
+                        );
+                    }
                     let title = file_path
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
@@ -389,10 +470,15 @@ fn open_path(
                     *ctx = Some(PlaybackContext {
                         decoder,
                         output,
+                        stretcher,
+                        resampler,
                         path: file_path,
                     });
 
                     if let Some(c) = ctx.as_mut() {
+                        if resume_ms > 0 {
+                            let _ = c.decoder.seek(resume_ms);
+                        }
                         prefill(c, shared, PREROLL_MS);
                         c.output.play();
                     }
@@ -457,13 +543,11 @@ fn decode_burst(ctx: &mut PlaybackContext, shared: &Arc<Shared>, target_ms: u64)
         if ctx.output.fill_ms() >= target_ms {
             return;
         }
-        match ctx.decoder.decode_chunk(CHUNK_FRAMES) {
-            Ok(Some(frames)) => {
-                ctx.output.push_frames(&frames);
-            }
+        match ctx.decoder.decode_chunk(decode_want(ctx)) {
+            Ok(Some(frames)) => push_resampled(ctx, &frames.data),
             Ok(None) => {
                 // End of stream reached during decode.
-                shared.eof.store(true, Ordering::Relaxed);
+                end_of_stream(ctx, shared);
                 return;
             }
             Err(_e) => {
@@ -491,12 +575,10 @@ fn refill_until(
         if ctx.output.fill_ms() >= target_ms {
             return None;
         }
-        match ctx.decoder.decode_chunk(CHUNK_FRAMES) {
-            Ok(Some(frames)) => {
-                ctx.output.push_frames(&frames);
-            }
+        match ctx.decoder.decode_chunk(decode_want(ctx)) {
+            Ok(Some(frames)) => push_resampled(ctx, &frames.data),
             Ok(None) => {
-                shared.eof.store(true, Ordering::Relaxed);
+                end_of_stream(ctx, shared);
                 return None;
             }
             Err(_e) => {
@@ -507,6 +589,54 @@ fn refill_until(
             return Some(cmd);
         }
     }
+}
+
+/// Decode granularity: the stretcher eats ~4096-frame chunks (section
+/// 6.5) when engaged; otherwise whatever the resampler wants next (rubato
+/// consumes fixed-size input chunks), the normal chunk when both bypass.
+fn decode_want(ctx: &PlaybackContext) -> usize {
+    if !ctx.stretcher.is_bypassed() {
+        CHUNK_FRAMES
+    } else {
+        ctx.resampler.input_frames_needed().unwrap_or(CHUNK_FRAMES)
+    }
+}
+
+/// Decoder output -> stretcher -> resampler -> ring, the section 6.6
+/// pipeline.
+fn push_resampled(ctx: &mut PlaybackContext, data: &[f32]) {
+    let stretched = ctx.stretcher.process(data);
+    if stretched.is_empty() {
+        return; // stretcher is accumulating input; no output yet
+    }
+    let out = ctx.resampler.process(&stretched);
+    if !out.is_empty() {
+        ctx.output.push_frames(&out);
+    }
+}
+
+/// Decoder returned end of stream: drain the stretcher's tail (it feeds
+/// the resampler), then the resampler's delayed tail into the ring once,
+/// then flag eof (section 6.10 step 1). The `eof` guard matters because
+/// `refill_until` keeps seeing `Ok(None)` every loop pass while playing
+/// the tail, and re-flushing would push silence over audio.
+fn end_of_stream(ctx: &mut PlaybackContext, shared: &Arc<Shared>) {
+    if shared.eof.load(Ordering::Relaxed) {
+        return;
+    }
+    let stretch_tail = ctx.stretcher.flush_tail();
+    if !stretch_tail.is_empty() {
+        let out = ctx.resampler.process(&stretch_tail);
+        if !out.is_empty() {
+            ctx.output.push_frames(&out);
+        }
+    }
+    let tail = ctx.resampler.flush_tail();
+    if !tail.is_empty() {
+        ctx.output.push_frames(&tail);
+        shared.drained.store(false, Ordering::Relaxed);
+    }
+    shared.eof.store(true, Ordering::Relaxed);
 }
 
 fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, shared: &Arc<Shared>) {
@@ -524,9 +654,14 @@ fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, shared: &Arc<Shared>
         std::thread::park_timeout(Duration::from_millis(2));
     }
 
-    // 5. Seek decoder, reset position bookkeeping.
+    // 5. Seek decoder, reset position bookkeeping. Stretcher and resampler
+    // are stateful stream processors: stale filter/history across the seek
+    // clicks and wobbles pitch, so both reset alongside the decoder seek
+    // (section 7.5 requires both).
     ctx.output.clear_ring();
     let _ = ctx.decoder.seek(target_ms);
+    ctx.stretcher.reset();
+    ctx.resampler.reset();
     shared.base_ms.store(target_ms, Ordering::Relaxed);
     shared.played_frames.store(0, Ordering::Relaxed);
     shared.eof.store(false, Ordering::Relaxed);
@@ -565,33 +700,21 @@ fn resume(
     ctx: &mut Option<PlaybackContext>,
     state: &mut PlayState,
     paused_since: &mut Option<std::time::Instant>,
+    released_path: &mut Option<PathBuf>,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
 ) {
     *paused_since = None;
 
-    // If resources were released after the 10s pause window, rebuild them.
-    if ctx.as_ref().map(|c| c.output.is_live()).unwrap_or(false) == false {
-        if let Some(c) = ctx.as_mut() {
+    // Released after the 10 s pause window (section 8.2): reopen the file
+    // at the stored position — open_path rebuilds decoder, stream, ring and
+    // resampler from scratch.
+    if ctx.is_none() {
+        if let Some(path) = released_path.take() {
             let resume_ms = shared.base_ms.load(Ordering::Relaxed);
-            let out_rate = shared.out_rate.load(Ordering::Relaxed);
-            match OutputStream::build(out_rate, Arc::clone(shared)) {
-                Ok(output) => {
-                    c.output = output;
-                    let _ = c.decoder.seek(resume_ms);
-                    shared.played_frames.store(0, Ordering::Relaxed);
-                    shared.eof.store(false, Ordering::Relaxed);
-                    shared.drained.store(false, Ordering::Relaxed);
-                    prefill(c, shared, PREROLL_MS);
-                }
-                Err(e) => {
-                    *state = PlayState::Error;
-                    let _ = tx_events.send(Event::Message(format!("Output device error: {e}")));
-                    let _ = tx_events.send(Event::StateChanged(*state));
-                    return;
-                }
-            }
+            open_path(path, state, ctx, paused_since, shared, tx_events, resume_ms);
         }
+        return;
     }
 
     if let Some(c) = ctx.as_mut() {
@@ -606,20 +729,21 @@ fn on_timeout(
     state: &mut PlayState,
     ctx: &mut Option<PlaybackContext>,
     paused_since: &mut Option<std::time::Instant>,
-    shared: &Arc<Shared>,
+    released_path: &mut Option<PathBuf>,
+    _shared: &Arc<Shared>,
     _tx_events: &Sender<Event>,
 ) {
-    if *state == PlayState::Paused {
-        if let (Some(since), Some(c)) = (*paused_since, ctx.as_mut()) {
+    if *state == PlayState::Paused && ctx.is_some() {
+        if let Some(since) = *paused_since {
             if since.elapsed() >= PAUSE_RELEASE {
-                // Section 8: release stream/decoder/DSP, keep only the path
-                // and resume position (already in `shared.base_ms`).
-                c.output.release();
+                // Section 8.2: release stream, ring, decoder and resampler;
+                // keep only the file path and the resume position
+                // (shared.base_ms).
+                *released_path = ctx.take().map(|c| c.path);
+                *paused_since = None;
             }
         }
     }
-    let _ = state; // no state transition on timeout otherwise in Phase 1
-    let _ = shared;
 }
 
 #[cfg(windows)]

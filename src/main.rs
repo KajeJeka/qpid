@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use engine::{Command, Event, Shared};
+use engine::{Command, Event, Shared, Speed};
 
 slint::include_modules!();
 
@@ -69,8 +69,10 @@ fn run_cli(initial_path: Option<String>) {
         return;
     }
 
-    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  q=quit");
+    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  q=quit");
 
+    // Fresh process always starts at 1x, so the cycle position is known.
+    let mut speed_idx: u32 = 1;
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
@@ -89,6 +91,18 @@ fn run_cli(initial_path: Option<String>) {
             }
             "P" => {
                 let _ = cmd_tx.send(Command::Prev);
+            }
+            "s" => {
+                // Cycle 1 -> 1.25 -> 1.5 -> 2 -> 0.5 -> 1, so three presses
+                // from a fresh start land on 2x (tools/bench.py relies on it).
+                speed_idx = match speed_idx {
+                    0 => 1,
+                    4 => 0,
+                    i => i + 1,
+                };
+                let speed = Speed::from_index(speed_idx);
+                println!("speed -> {}x", speed.as_f64());
+                let _ = cmd_tx.send(Command::SetSpeed(speed));
             }
             "q" => {
                 let _ = cmd_tx.send(Command::Shutdown);
