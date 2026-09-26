@@ -401,8 +401,6 @@ fn handle_command(
             let old = ctx.as_ref().map(|c| c.path.clone()).or_else(|| released_path.clone());
             if let Some(old) = old {
                 if old != path {
-                    let cur = shared.position_ms();
-                    let _ = cur;
                     save_now(store, shared, Some(&old), "open of another path");
                     // ^^^ position of the old file is captured BEFORE the
                     // open resets bookkeeping; save_now reads shared state,
@@ -502,22 +500,25 @@ fn handle_command(
         }
 
         Command::SetSpeed(speed) => {
-            // Trigger 5, first line: position under the OLD speed is still
-            // intact (section 7.1: a speed change is a flush to the current
-            // position with the new speed — never a live parameter tweak).
-            // Capturing later would be too late: position_ms multiplies
-            // played_frames by speed_milli, so storing the new speed first
+            // Section 7.1: a speed change is a flush to the current
+            // position with the new speed — never a live parameter tweak.
+            // Capture the position under the OLD speed first: position_ms
+            // multiplies played_frames by speed_milli, so storing first
             // would jump the position (e.g. double it going 1x -> 2x).
+            let cur = shared.position_ms();
+            shared.speed_milli.store(speed.as_milli(), Ordering::Relaxed);
+            shared.base_ms.store(cur, Ordering::Relaxed);
+            shared.played_frames.store(0, Ordering::Relaxed);
+            // Trigger 5: placed AFTER the rewrite — position_ms() is still
+            // cur (base holds it, played_frames is 0, so speed no longer
+            // enters) while speed_milli already carries the NEW speed, so
+            // state.json gets both the position and the new speed.
             save_now(
                 store,
                 shared,
                 ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
                 "speed change",
             );
-            let cur = shared.position_ms();
-            shared.speed_milli.store(speed.as_milli(), Ordering::Relaxed);
-            shared.base_ms.store(cur, Ordering::Relaxed);
-            shared.played_frames.store(0, Ordering::Relaxed);
             if let Some(c) = ctx.as_mut() {
                 c.stretcher.set_speed(speed);
             }
@@ -663,12 +664,12 @@ fn open_path(
                     *released_path = None;
                 }
                 Err(e) => {
-                    // Trigger 7 (error stop): ctx/released_path still name
-                    // the previous current file — same derivation as
-                    // trigger 4.
-                    let current = ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref());
+                    // Deliberately NO save here: open_path already rewrote
+                    // shared (duration/base/played describe this failed
+                    // attempt) while ctx still names the previous file, so
+                    // save_now would record the old file at ~0 and clobber
+                    // trigger 4's correct pre-open save.
                     *state = PlayState::Error;
-                    save_now(store, shared, current, "error stop");
                     let _ = tx_events.send(Event::Message(format!("Output device error: {e}")));
                     let _ = tx_events.send(Event::StateChanged(*state));
                 }
@@ -944,10 +945,11 @@ fn advance_to(
                 cand += 1;
                 if cand >= playlist.len() {
                     *state = PlayState::Error;
-                    // Trigger 7 (error stop) — the only error-stop save:
-                    // the three former caller-side StateChanged(Error)
+                    // Trigger 7 (error stop), run-level: no file playable.
+                    // The three former caller-side StateChanged(Error)
                     // sends were dropped (double-emission fix), so this arm
-                    // is the single source.
+                    // is the single StateChanged(Error) source — open_path's
+                    // file-open failure is the other error-stop save.
                     save_now(
                         store,
                         shared,
