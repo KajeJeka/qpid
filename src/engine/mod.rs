@@ -16,7 +16,7 @@ pub mod decode;
 pub mod dsp;
 pub mod output;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
@@ -25,6 +25,7 @@ use std::time::Duration;
 use self::decode::Decoder;
 use self::dsp::{Resampler, Stretcher};
 use self::output::OutputStream;
+use self::store::Store;
 
 // ---------------------------------------------------------------------
 // Shared types (architecture.md section 5)
@@ -190,15 +191,10 @@ struct PlaybackContext {
 pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>) {
     lower_thread_priority();
 
-    // Loaded here (section 5.2: engine owns persistence). Wire-up of the
-    // triggers lands in a later task; loading now links serde and lets the
-    // exe-size gate be measured before anything builds on it.
+    // Loaded here (section 5.2: engine owns persistence). Every write goes
+    // through save_now (section 9 rule 5), which is the only place that
+    // calls store.save().
     let mut store = store::load();
-    // deliberately trivial use; keep binding live (block scopes the lint allow)
-    #[allow(dead_code)]
-    {
-        store.speed = store.speed;
-    }
 
     let mut state = PlayState::Idle;
     let mut ctx: Option<PlaybackContext> = None;
@@ -209,6 +205,13 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     let mut playlist: Vec<PathBuf> = Vec::new();
     let mut idx: usize = 0;
 
+    // Section 9 rule 5: checkpoint every 30 s while playing, and only if
+    // the position changed. Rides the existing recv_timeout wake — no new
+    // thread or timer (section 18).
+    const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(30);
+    let mut next_checkpoint = std::time::Instant::now() + CHECKPOINT_INTERVAL;
+    let mut last_saved_pos: u64 = 0;
+
     loop {
         let wait = match state {
             PlayState::Playing => {
@@ -216,12 +219,16 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     .as_ref()
                     .map(|c| c.output.fill_ms())
                     .unwrap_or(HIGH_WATER_MS);
-                if fill_ms <= LOW_WATER_MS {
+                let wait = if fill_ms <= LOW_WATER_MS {
                     Duration::from_millis(0)
                 } else {
                     let until_low = fill_ms - LOW_WATER_MS;
                     Duration::from_millis(until_low.clamp(100, 2000))
-                }
+                };
+                // Shrink the fill-based wait so the checkpoint can fire on
+                // time even when the ring stays full for minutes.
+                let until_ckpt = next_checkpoint.saturating_duration_since(std::time::Instant::now());
+                wait.min(until_ckpt)
             }
             // Released (ctx taken): no timer — only a command wakes us,
             // which is what budget 7 ("no timers") asks for after 10 s.
@@ -241,6 +248,7 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &mut released_path,
                     &mut playlist,
                     &mut idx,
+                    &mut store,
                     &shared,
                     &tx_events,
                 ) {
@@ -257,7 +265,31 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &tx_events,
                 );
             }
-            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Disconnected) => {
+                // Sender dropped without a Shutdown (UI window closed the
+                // channel): still an app exit — persist before the thread
+                // dies.
+                save_now(
+                    &mut store,
+                    &shared,
+                    ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+                    "app exit",
+                );
+                break;
+            }
+        }
+
+        // Section 9 rule 5: checkpoint every 30 s while playing, and only
+        // if the position changed. Folded into the existing wake — no new
+        // thread or timer (section 18).
+        if state == PlayState::Playing && std::time::Instant::now() >= next_checkpoint {
+            let pos = shared.position_ms();
+            if pos != last_saved_pos {
+                let current = ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref());
+                save_now(&mut store, &shared, current, "30s checkpoint");
+                last_saved_pos = pos;
+            }
+            next_checkpoint = std::time::Instant::now() + CHECKPOINT_INTERVAL;
         }
 
         if state == PlayState::Playing {
@@ -271,20 +303,20 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                 let next = idx + 1;
                 if next < playlist.len() {
                     // Section 7.4.3: mark done + advance, stream stays
-                    // open (done-marking lands with save_now in Task 4).
-                    if !advance_to(
+                    // open. save_now inside advance_to writes the rule 4
+                    // `done` flag for the finished file.
+                    advance_to(
                         next,
                         &playlist,
                         &mut idx,
+                        &mut store,
                         &mut state,
                         &mut ctx,
                         &mut released_path,
                         &shared,
                         &tx_events,
                         false,
-                    ) {
-                        let _ = tx_events.send(Event::StateChanged(PlayState::Error));
-                    }
+                    );
                 } else {
                     // Section 7.4.4: last file -> Ended.
                     state = PlayState::Ended;
@@ -300,6 +332,7 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &mut released_path,
                     &mut playlist,
                     &mut idx,
+                    &mut store,
                     &shared,
                     &tx_events,
                 ) {
@@ -308,6 +341,33 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
             }
         }
     }
+}
+
+/// Section 9 rule 5's single write path. `current` is the file being
+/// left/updated (caller derives it from ctx.path or released_path);
+/// None writes top-level fields only (speed) plus folder-less state.
+fn save_now(store: &mut Store, shared: &Arc<Shared>, current: Option<&Path>, reason: &'static str) {
+    store.speed = store::milli_to_speed(shared.speed_milli.load(Ordering::Relaxed));
+    if let Some(p) = current {
+        if let (Some(folder), Some(name)) = (p.parent(), p.file_name()) {
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let pos = shared.position_ms();
+            let dur = shared.duration_ms.load(Ordering::Relaxed);
+            // Rule 4: done at EOS or within the last 3 s. Duration 0
+            // (unknown) can only be done at EOS (the saturating compare
+            // would otherwise be trivially true).
+            let done = if dur == 0 {
+                shared.eof.load(Ordering::Relaxed)
+            } else {
+                pos >= dur.saturating_sub(3000)
+            };
+            store.record(&folder.to_string_lossy(), &name.to_string_lossy(), size, pos, done);
+        }
+    }
+    if cfg!(debug_assertions) {
+        eprintln!("[store] save ({reason})");
+    }
+    store.save();
 }
 
 /// Returns false on Shutdown (caller breaks the loop).
@@ -319,14 +379,38 @@ fn handle_command(
     released_path: &mut Option<PathBuf>,
     playlist: &mut Vec<PathBuf>,
     idx: &mut usize,
+    store: &mut Store,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
 ) -> bool {
     match cmd {
-        Command::Shutdown => return false,
+        Command::Shutdown => {
+            // Section 9 rule 5: app exit persists before the thread dies.
+            save_now(
+                store,
+                shared,
+                ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+                "app exit",
+            );
+            return false;
+        }
 
         Command::OpenPath(path) => {
-            open_path(path, state, ctx, paused_since, shared, tx_events, 0);
+            // Trigger 4: save the file being left, before open_path resets
+            // the position/duration bookkeeping.
+            let old = ctx.as_ref().map(|c| c.path.clone()).or_else(|| released_path.clone());
+            if let Some(old) = old {
+                if old != path {
+                    let cur = shared.position_ms();
+                    let _ = cur;
+                    save_now(store, shared, Some(&old), "open of another path");
+                    // ^^^ position of the old file is captured BEFORE the
+                    // open resets bookkeeping; save_now reads shared state,
+                    // so the recorded position is correct as long as it is
+                    // read while base/played still describe the old file.
+                }
+            }
+            open_path(path, state, ctx, paused_since, shared, tx_events, 0, store, released_path);
             // T3 probe wiring (controller ruling): populate the playlist
             // from the opened file's folder so Next/Prev/EOF advance has
             // something to navigate. T5 moves this inside open_path.
@@ -347,6 +431,7 @@ fn handle_command(
                     released_path,
                     shared,
                     tx_events,
+                    store,
                 );
             } else if *state == PlayState::Ended {
                 if let Some(c) = ctx.as_mut() {
@@ -359,14 +444,16 @@ fn handle_command(
 
         Command::Pause => {
             if *state == PlayState::Playing {
-                pause(ctx, state, paused_since, shared, tx_events);
+                pause(ctx, state, paused_since, shared, tx_events, store);
             }
         }
 
         Command::TogglePlay => {
             match *state {
-                PlayState::Playing => pause(ctx, state, paused_since, shared, tx_events),
-                PlayState::Paused => resume(ctx, state, paused_since, released_path, shared, tx_events),
+                PlayState::Playing => pause(ctx, state, paused_since, shared, tx_events, store),
+                PlayState::Paused => {
+                    resume(ctx, state, paused_since, released_path, shared, tx_events, store)
+                }
                 _ => {}
             }
         }
@@ -383,9 +470,7 @@ fn handle_command(
 
         Command::Next => {
             if *idx + 1 < playlist.len() {
-                if !advance_to(*idx + 1, playlist, idx, state, ctx, released_path, shared, tx_events, true) {
-                    let _ = tx_events.send(Event::StateChanged(PlayState::Error));
-                }
+                advance_to(*idx + 1, playlist, idx, store, state, ctx, released_path, shared, tx_events, true);
             } // else: last file -> no-op (section 7.4.4: Ended comes from EOF)
         }
         Command::Prev => {
@@ -401,10 +486,12 @@ fn handle_command(
                         if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
                     }
                 }
+                // Trigger 3: restart recorded after the fact so pos 0 is
+                // what lands (rule 3 drops the entry — the user restarted).
+                let current = ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref());
+                save_now(store, shared, current, "prev restart");
             } else if *idx > 0 {
-                if !advance_to(*idx - 1, playlist, idx, state, ctx, released_path, shared, tx_events, true) {
-                    let _ = tx_events.send(Event::StateChanged(PlayState::Error));
-                }
+                advance_to(*idx - 1, playlist, idx, store, state, ctx, released_path, shared, tx_events, true);
             } else if *state == PlayState::Playing {
                 flush_playing(ctx.as_mut().unwrap(), 0, shared); // restart first file
             } else {
@@ -415,11 +502,18 @@ fn handle_command(
         }
 
         Command::SetSpeed(speed) => {
-            // Section 7.1: a speed change is a flush to the current
-            // position with the new speed — never a live parameter tweak.
-            // Capture the position under the OLD speed first: position_ms
-            // multiplies played_frames by speed_milli, so storing first
+            // Trigger 5, first line: position under the OLD speed is still
+            // intact (section 7.1: a speed change is a flush to the current
+            // position with the new speed — never a live parameter tweak).
+            // Capturing later would be too late: position_ms multiplies
+            // played_frames by speed_milli, so storing the new speed first
             // would jump the position (e.g. double it going 1x -> 2x).
+            save_now(
+                store,
+                shared,
+                ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+                "speed change",
+            );
             let cur = shared.position_ms();
             shared.speed_milli.store(speed.as_milli(), Ordering::Relaxed);
             shared.base_ms.store(cur, Ordering::Relaxed);
@@ -485,6 +579,8 @@ fn open_path(
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
     resume_ms: u64, // 0 on a fresh open; a resume-after-release position
+    store: &mut Store,
+    released_path: &mut Option<PathBuf>,
 ) {
     *paused_since = None;
 
@@ -561,16 +657,28 @@ fn open_path(
                         duration_ms: shared.duration_ms.load(Ordering::Relaxed),
                     });
                     let _ = tx_events.send(Event::StateChanged(*state));
+                    // Success supersedes any earlier release: a stale
+                    // released_path would make the next trigger 4 / error
+                    // save attribute the position to the wrong file.
+                    *released_path = None;
                 }
                 Err(e) => {
+                    // Trigger 7 (error stop): ctx/released_path still name
+                    // the previous current file — same derivation as
+                    // trigger 4.
+                    let current = ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref());
                     *state = PlayState::Error;
+                    save_now(store, shared, current, "error stop");
                     let _ = tx_events.send(Event::Message(format!("Output device error: {e}")));
                     let _ = tx_events.send(Event::StateChanged(*state));
                 }
             }
         }
         Err(e) => {
+            // Trigger 7 (error stop), same current derivation as above.
+            let current = ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref());
             *state = PlayState::Error;
+            save_now(store, shared, current, "error stop");
             let _ = tx_events.send(Event::Message(format!("Could not open file: {e}")));
             let _ = tx_events.send(Event::StateChanged(*state));
         }
@@ -766,6 +874,7 @@ fn advance_to(
     target: usize,
     playlist: &[PathBuf],
     idx: &mut usize,
+    store: &mut Store,
     state: &mut PlayState,
     ctx: &mut Option<PlaybackContext>,
     released_path: &mut Option<PathBuf>,
@@ -776,6 +885,14 @@ fn advance_to(
     if playlist.is_empty() || target >= playlist.len() {
         return true; // nothing to advance to (e.g. Next on last file: no-op)
     }
+    // Triggers 2 and 3 (next/prev), and the EOF handoff when ramp == false:
+    // the file being left is recorded while base/played still describe it.
+    save_now(
+        store,
+        shared,
+        ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+        "next/prev",
+    );
     // Try target, then forward (section 6.9: skip to the next file).
     let mut cand = target;
     loop {
@@ -827,6 +944,16 @@ fn advance_to(
                 cand += 1;
                 if cand >= playlist.len() {
                     *state = PlayState::Error;
+                    // Trigger 7 (error stop) — the only error-stop save:
+                    // the three former caller-side StateChanged(Error)
+                    // sends were dropped (double-emission fix), so this arm
+                    // is the single source.
+                    save_now(
+                        store,
+                        shared,
+                        ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+                        "error stop",
+                    );
                     let _ = tx_events.send(Event::StateChanged(PlayState::Error));
                     let _ = tx_events.send(Event::Message("No playable files left".into()));
                     return false;
@@ -842,7 +969,13 @@ fn pause(
     paused_since: &mut Option<std::time::Instant>,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
+    store: &mut Store,
 ) {
+    // Trigger 1 (pause): fires for Command::Pause and TogglePlay->pause.
+    // ctx is None after a 10 s release — current is None then, so nothing
+    // is recorded but the top-level speed still lands. Placed before the
+    // gain-down so the recorded position is pre-ramp.
+    save_now(store, shared, ctx.as_ref().map(|c| c.path.as_path()), "pause");
     if let Some(c) = ctx.as_mut() {
         shared.set_gain(0.0);
         std::thread::sleep(Duration::from_millis(20));
@@ -860,6 +993,7 @@ fn resume(
     released_path: &mut Option<PathBuf>,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
+    store: &mut Store,
 ) {
     *paused_since = None;
 
@@ -869,7 +1003,7 @@ fn resume(
     if ctx.is_none() {
         if let Some(path) = released_path.take() {
             let resume_ms = shared.base_ms.load(Ordering::Relaxed);
-            open_path(path, state, ctx, paused_since, shared, tx_events, resume_ms);
+            open_path(path, state, ctx, paused_since, shared, tx_events, resume_ms, store, released_path);
         }
         return;
     }

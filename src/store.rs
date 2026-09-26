@@ -86,7 +86,6 @@ fn now_unix() -> u64 {
 }
 
 impl Store {
-    #[allow(dead_code)] // callers land in a later Phase 3 task
     pub fn save(&mut self) {
         match state_path() {
             Some(p) => self.save_to(&p),
