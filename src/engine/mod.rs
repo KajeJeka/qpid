@@ -172,6 +172,7 @@ impl Shared {
 const HIGH_WATER_MS: u64 = 2900;
 const LOW_WATER_MS: u64 = 1000;
 const PREROLL_MS: u64 = 250;
+const PREV_RESTART_THRESHOLD_MS: u64 = 5000;
 const PAUSE_RELEASE: Duration = Duration::from_secs(10);
 const CHUNK_FRAMES: usize = 4096;
 
@@ -205,6 +206,8 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     // Set by the 10 s pause release (section 8.2): the only thing kept of
     // the context besides the resume position already in `shared.base_ms`.
     let mut released_path: Option<PathBuf> = None;
+    let mut playlist: Vec<PathBuf> = Vec::new();
+    let mut idx: usize = 0;
 
     loop {
         let wait = match state {
@@ -236,6 +239,8 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &mut ctx,
                     &mut paused_since,
                     &mut released_path,
+                    &mut playlist,
+                    &mut idx,
                     &shared,
                     &tx_events,
                 ) {
@@ -257,17 +262,35 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
 
         if state == PlayState::Playing {
             let pending = if let Some(c) = ctx.as_mut() {
-                let cmd = refill_until(c, &shared, HIGH_WATER_MS, &rx);
-                if c.output.is_drained_eof(&shared) {
-                    // End of track. Phase 1: single file, so this becomes Ended.
-                    // Phase 3 replaces this branch with playlist advance.
-                    state = PlayState::Ended;
-                    let _ = tx_events.send(Event::StateChanged(state));
-                }
-                cmd
+                refill_until(c, &shared, HIGH_WATER_MS, &rx)
             } else {
                 None
             };
+            let drained = ctx.as_ref().map(|c| c.output.is_drained_eof(&shared)).unwrap_or(false);
+            if drained {
+                let next = idx + 1;
+                if next < playlist.len() {
+                    // Section 7.4.3: mark done + advance, stream stays
+                    // open (done-marking lands with save_now in Task 4).
+                    if !advance_to(
+                        next,
+                        &playlist,
+                        &mut idx,
+                        &mut state,
+                        &mut ctx,
+                        &mut released_path,
+                        &shared,
+                        &tx_events,
+                        false,
+                    ) {
+                        let _ = tx_events.send(Event::StateChanged(PlayState::Error));
+                    }
+                } else {
+                    // Section 7.4.4: last file -> Ended.
+                    state = PlayState::Ended;
+                    let _ = tx_events.send(Event::StateChanged(state));
+                }
+            }
             if let Some(cmd) = pending {
                 if !handle_command(
                     cmd,
@@ -275,6 +298,8 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     &mut ctx,
                     &mut paused_since,
                     &mut released_path,
+                    &mut playlist,
+                    &mut idx,
                     &shared,
                     &tx_events,
                 ) {
@@ -292,6 +317,8 @@ fn handle_command(
     ctx: &mut Option<PlaybackContext>,
     paused_since: &mut Option<std::time::Instant>,
     released_path: &mut Option<PathBuf>,
+    playlist: &mut Vec<PathBuf>,
+    idx: &mut usize,
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
 ) -> bool {
@@ -300,6 +327,15 @@ fn handle_command(
 
         Command::OpenPath(path) => {
             open_path(path, state, ctx, paused_since, shared, tx_events, 0);
+            // T3 probe wiring (controller ruling): populate the playlist
+            // from the opened file's folder so Next/Prev/EOF advance has
+            // something to navigate. T5 moves this inside open_path.
+            if let Some(opened) = ctx.as_ref().map(|c| c.path.clone()) {
+                if let Some(parent) = opened.parent() {
+                    *playlist = playlist::scan(parent);
+                    *idx = playlist::index_of(playlist, &opened).unwrap_or(0);
+                }
+            }
         }
 
         Command::Play => {
@@ -345,16 +381,37 @@ fn handle_command(
             seek_to(ms, ctx, state, shared);
         }
 
-        // Phase 3 implements real playlist navigation (playlist.rs). Phase 1
-        // has no playlist, only the single opened file, so these fall back
-        // to seeking within it: Next jumps to end-of-file (which the normal
-        // EOF/Ended path then handles), Prev jumps to the start.
         Command::Next => {
-            let dur = shared.duration_ms.load(Ordering::Relaxed);
-            seek_to(dur, ctx, state, shared);
+            if *idx + 1 < playlist.len() {
+                if !advance_to(*idx + 1, playlist, idx, state, ctx, released_path, shared, tx_events, true) {
+                    let _ = tx_events.send(Event::StateChanged(PlayState::Error));
+                }
+            } // else: last file -> no-op (section 7.4.4: Ended comes from EOF)
         }
         Command::Prev => {
-            seek_to(0, ctx, state, shared);
+            let threshold = PREV_RESTART_THRESHOLD_MS;
+            if shared.position_ms() > threshold {
+                // Restart current file (named constant, partner decision).
+                let dur_target_zero = 0;
+                match *state {
+                    PlayState::Playing => flush_playing(ctx.as_mut().unwrap(), dur_target_zero, shared),
+                    _ => {
+                        shared.base_ms.store(0, Ordering::Relaxed);
+                        shared.played_frames.store(0, Ordering::Relaxed);
+                        if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
+                    }
+                }
+            } else if *idx > 0 {
+                if !advance_to(*idx - 1, playlist, idx, state, ctx, released_path, shared, tx_events, true) {
+                    let _ = tx_events.send(Event::StateChanged(PlayState::Error));
+                }
+            } else if *state == PlayState::Playing {
+                flush_playing(ctx.as_mut().unwrap(), 0, shared); // restart first file
+            } else {
+                shared.base_ms.store(0, Ordering::Relaxed);
+                shared.played_frames.store(0, Ordering::Relaxed);
+                if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
+            }
         }
 
         Command::SetSpeed(speed) => {
@@ -629,44 +686,154 @@ fn end_of_stream(ctx: &mut PlaybackContext, shared: &Arc<Shared>) {
     shared.eof.store(true, Ordering::Relaxed);
 }
 
-fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, shared: &Arc<Shared>) {
-    // 1. Ramp down.
+/// Section 7 flush steps 1-4 + ring clear, shared by flush_playing and
+/// advance_to's manual (ramp) path.
+fn ramp_and_flush_ack(ctx: &mut PlaybackContext, shared: &Arc<Shared>) {
     shared.set_gain(0.0);
     std::thread::sleep(Duration::from_millis(20));
-
-    // 2/3/4. Request flush, wait for callback ack.
     shared.flush_req.store(true, Ordering::SeqCst);
     let start = std::time::Instant::now();
     while !shared.flush_ack.load(Ordering::SeqCst) {
         if start.elapsed() > Duration::from_millis(200) {
-            break; // device stall; proceed anyway rather than hang the engine
+            break; // device stall; proceed rather than hang
         }
         std::thread::park_timeout(Duration::from_millis(2));
     }
-
-    // 5. Seek decoder, reset position bookkeeping. Stretcher and resampler
-    // are stateful stream processors: stale filter/history across the seek
-    // clicks and wobbles pitch, so both reset alongside the decoder seek
-    // (section 7.5 requires both).
     ctx.output.clear_ring();
-    let _ = ctx.decoder.seek(target_ms);
-    ctx.stretcher.reset();
-    ctx.resampler.reset();
-    shared.base_ms.store(target_ms, Ordering::Relaxed);
+}
+
+/// Section 7 flush steps 5 (stores)-7: position bookkeeping, refill to
+/// PREROLL, release the flush gate, ramp back up. The caller has already
+/// seeked or swapped the decoder and reset the DSP.
+fn refill_and_release_flush(ctx: &mut PlaybackContext, shared: &Arc<Shared>, base_ms: u64) {
+    shared.base_ms.store(base_ms, Ordering::Relaxed);
     shared.played_frames.store(0, Ordering::Relaxed);
     shared.eof.store(false, Ordering::Relaxed);
     shared.drained.store(false, Ordering::Relaxed);
-
-    // 6. Refill, then release the flush gate. Clear flush_req first so the
-    // callback starts reading again while flush_ack is still true; clearing
-    // ack first would open a window where req&&!ack causes a re-drain of
-    // the just-prefilled PREROLL.
     prefill(ctx, shared, PREROLL_MS);
     shared.flush_req.store(false, Ordering::SeqCst);
     shared.flush_ack.store(false, Ordering::SeqCst);
-
-    // 7. Ramp up.
     shared.set_gain(1.0);
+}
+
+fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, shared: &Arc<Shared>) {
+    ramp_and_flush_ack(ctx, shared);
+    let _ = ctx.decoder.seek(target_ms);
+    ctx.stretcher.reset();
+    ctx.resampler.reset();
+    refill_and_release_flush(ctx, shared, target_ms);
+}
+
+/// Section 7.4.3 file handoff body: swap in a freshly opened decoder.
+/// The resampler is rebuilt unconditionally — it was keyed to the
+/// PREVIOUS file's sample rate at open_path, and a 44.1 -> 48 kHz advance
+/// would otherwise reuse the wrong config (Phase 1 pitch bug in a new
+/// disguise). Also stores the new duration so the UI can never show the
+/// old track's length against the new track's position.
+fn swap_in(ctx: &mut PlaybackContext, new_dec: Decoder, new_path: PathBuf, shared: &Arc<Shared>) {
+    shared.duration_ms.store(new_dec.duration_ms().unwrap_or(0), Ordering::Relaxed);
+    ctx.resampler = Resampler::new(new_dec.sample_rate(), ctx.output.device_rate());
+    ctx.stretcher.reset(); // keeps speed (speed-keyed, not rate-keyed)
+    ctx.decoder = new_dec;
+    ctx.path = new_path;
+    shared.base_ms.store(0, Ordering::Relaxed);
+    shared.played_frames.store(0, Ordering::Relaxed);
+    shared.eof.store(false, Ordering::Relaxed);
+    shared.drained.store(false, Ordering::Relaxed);
+}
+
+fn track_event(playlist: &[PathBuf], idx: usize, shared: &Arc<Shared>) -> Event {
+    let p = &playlist[idx];
+    let title = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let folder = p.parent().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    Event::TrackChanged {
+        folder,
+        title,
+        index: idx as u32 + 1,
+        count: playlist.len() as u32,
+        duration_ms: shared.duration_ms.load(Ordering::Relaxed),
+    }
+}
+
+/// Navigate to `playlist[target]`. Three shapes (spec section 2):
+/// - Playing + ramp: section 7 flush protocol, stream stays open.
+/// - Playing + !ramp (EOF handoff): ring already empty — swap and refill
+///   directly, no ramp (section 7.4.3, gap under 100 ms).
+/// - Not Playing: record selection via released_path; Play reopens.
+/// Forward-skip on a failed Decoder::open (section 6.9); Error only when
+/// no file from `target` onward is playable. Returns false iff Error.
+fn advance_to(
+    target: usize,
+    playlist: &[PathBuf],
+    idx: &mut usize,
+    state: &mut PlayState,
+    ctx: &mut Option<PlaybackContext>,
+    released_path: &mut Option<PathBuf>,
+    shared: &Arc<Shared>,
+    tx_events: &Sender<Event>,
+    ramp: bool,
+) -> bool {
+    if playlist.is_empty() || target >= playlist.len() {
+        return true; // nothing to advance to (e.g. Next on last file: no-op)
+    }
+    // Try target, then forward (section 6.9: skip to the next file).
+    let mut cand = target;
+    loop {
+        let path = playlist[cand].clone();
+        match Decoder::open(&path) {
+            Ok(new_dec) => {
+                *idx = cand;
+                match *state {
+                    PlayState::Playing if ctx.is_some() => {
+                        let c = ctx.as_mut().unwrap();
+                        if ramp {
+                            ramp_and_flush_ack(c, shared);
+                            swap_in(c, new_dec, path, shared);
+                            refill_and_release_flush(c, shared, 0);
+                        } else {
+                            // EOF handoff: ring is empty, no flush needed.
+                            shared.base_ms.store(0, Ordering::Relaxed);
+                            swap_in(c, new_dec, path, shared);
+                            prefill(c, shared, PREROLL_MS);
+                        }
+                    }
+                    _ => {
+                        // Paused / Ended / released: no live stream to
+                        // flush. Metadata-only probe for the new duration
+                        // (Decoder::open already computed it from
+                        // codec_params; no packets decoded). The probe
+                        // decoder is dropped — resume() reopens via
+                        // open_path.
+                        shared.duration_ms.store(new_dec.duration_ms().unwrap_or(0), Ordering::Relaxed);
+                        if let Some(mut old) = ctx.take() {
+                            old.output.pause(); // stream was already stopped while paused
+                            // drop old: ring, decoder, DSP go with it (section 8.2)
+                        }
+                        *released_path = Some(path);
+                        shared.base_ms.store(0, Ordering::Relaxed);
+                        shared.played_frames.store(0, Ordering::Relaxed);
+                        *state = PlayState::Paused;
+                        let _ = tx_events.send(Event::StateChanged(*state));
+                    }
+                }
+                let _ = tx_events.send(track_event(playlist, *idx, shared));
+                return true;
+            }
+            Err(_) => {
+                let _ = tx_events.send(Event::Message(format!(
+                    "Skipping unreadable file: {}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                )));
+                cand += 1;
+                if cand >= playlist.len() {
+                    *state = PlayState::Error;
+                    let _ = tx_events.send(Event::StateChanged(PlayState::Error));
+                    let _ = tx_events.send(Event::Message("No playable files left".into()));
+                    return false;
+                }
+            }
+        }
+    }
 }
 
 fn pause(
