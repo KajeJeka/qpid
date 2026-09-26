@@ -572,6 +572,19 @@ fn seek_to(
     }
 }
 
+/// Section 9 rule 2 pick: last_file if present and not done; else the
+/// first not-done file (a missing `files` entry counts as not done); else 0.
+fn rule2_pick(playlist: &[PathBuf], f: &store::Folder) -> usize {
+    let last = &f.last_file;
+    playlist.iter().position(|p| {
+        p.file_name().map(|n| store::key(&n.to_string_lossy()) == *last).unwrap_or(false)
+    }).filter(|_| !f.files.get(last).map(|e| e.done).unwrap_or(false))
+        .or_else(|| playlist.iter().position(|p| {
+            f.files.get(&store::key(&p.file_name().unwrap_or_default().to_string_lossy()))
+                .map(|e| !e.done).unwrap_or(true)
+        })).unwrap_or(0)
+}
+
 fn open_path(
     path: PathBuf,
     state: &mut PlayState,
@@ -617,16 +630,7 @@ fn open_path(
         // Rule 2 pick: last_file if present and not done; else first
         // not-done; else first. Single-file opens (rule 3) and
         // resume-after-release (resume_ms > 0) keep the file as opened.
-        let pick = store.folders.get(&fk).map(|f| {
-            let last = &f.last_file;
-            let last_ok = playlist.iter().position(|p| {
-                p.file_name().map(|n| store::key(&n.to_string_lossy()) == *last).unwrap_or(false)
-            }).filter(|_| !f.files.get(last).map(|e| e.done).unwrap_or(false));
-            last_ok.or_else(|| playlist.iter().position(|p| {
-                f.files.get(&store::key(&p.file_name().unwrap_or_default().to_string_lossy()))
-                    .map(|e| !e.done).unwrap_or(false)
-            })).unwrap_or(0)
-        }).unwrap_or(0);
+        let pick = store.folders.get(&fk).map(|f| rule2_pick(playlist, f)).unwrap_or(0);
         *idx = pick;
         file_path = playlist[*idx].clone();
     }
@@ -1144,4 +1148,43 @@ fn lower_thread_priority() {
 fn lower_thread_priority() {
     // No-op on non-Windows dev hosts (this project targets Windows 11, but
     // `cargo check` on other platforms should still compile for iteration).
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn rule2_pick_treats_missing_entries_as_not_done() {
+        let pl = vec![
+            PathBuf::from("C:\\Music\\a.mp3"),
+            PathBuf::from("C:\\Music\\b.mp3"),
+            PathBuf::from("C:\\Music\\c.mp3"),
+        ];
+        let entry = |done: bool| store::FileEntry { pos_ms: 0, size: 0, done };
+
+        // last_file done: fall through to the first not-done file (b).
+        let mut files = HashMap::new();
+        files.insert(store::key("a.mp3"), entry(true));
+        files.insert(store::key("b.mp3"), entry(false));
+        files.insert(store::key("c.mp3"), entry(true));
+        let f = store::Folder { touched: 0, last_file: store::key("a.mp3"), files };
+        assert_eq!(rule2_pick(&pl, &f), 1);
+
+        // last_file with no entry at all: treated as not done, keep it.
+        let f2 = store::Folder {
+            touched: 0,
+            last_file: store::key("b.mp3"),
+            files: HashMap::new(),
+        };
+        assert_eq!(rule2_pick(&pl, &f2), 1);
+
+        // last_file done, later files missing entries: pick the later file,
+        // never the done file at index 0.
+        let mut files3 = HashMap::new();
+        files3.insert(store::key("a.mp3"), entry(true));
+        let f3 = store::Folder { touched: 0, last_file: store::key("a.mp3"), files: files3 };
+        assert_eq!(rule2_pick(&pl, &f3), 1);
+    }
 }

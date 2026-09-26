@@ -45,8 +45,10 @@ pub fn scan(dir: &Path) -> Vec<PathBuf> {
 }
 
 pub fn index_of(files: &[PathBuf], path: &Path) -> Option<usize> {
-    let target = path.to_string_lossy().to_lowercase();
-    files.iter().position(|p| p.to_string_lossy().to_lowercase() == target)
+    // CLI opens may use '/' while scan results use '\': normalize both sides.
+    let target = path.to_string_lossy().to_lowercase().replace('/', "\\");
+    files.iter()
+        .position(|p| p.to_string_lossy().to_lowercase().replace('/', "\\") == target)
 }
 
 #[cfg(test)]
@@ -94,5 +96,10 @@ mod tests {
         ];
         assert_eq!(index_of(&files, std::path::Path::new("c:\\MUSIC\\B.MP3")), Some(1));
         assert_eq!(index_of(&files, std::path::Path::new("C:\\Music\\zz.mp3")), None);
+        // Forward-slash candidate matches backslash entry and vice versa.
+        let rel = vec![std::path::PathBuf::from("test_audio\\test.mp3")];
+        assert_eq!(index_of(&rel, std::path::Path::new("test_audio/test.mp3")), Some(0));
+        let fwd = vec![std::path::PathBuf::from("test_audio/test.mp3")];
+        assert_eq!(index_of(&fwd, std::path::Path::new("test_audio\\test.mp3")), Some(0));
     }
 }
