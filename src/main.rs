@@ -72,12 +72,10 @@ fn run_cli(initial_path: Option<String>) {
     if let Some(p) = initial_path {
         let _ = cmd_tx.send(Command::OpenPath(PathBuf::from(p)));
     } else {
-        eprintln!("usage: qpid --cli <file-or-folder>");
-        // Never exit without a Shutdown: cmd_tx stays alive until we
-        // return, so the engine would never see a Disconnected either.
-        let _ = cmd_tx.send(Command::Shutdown);
-        let _ = engine.join();
-        return;
+        // No argument: restore the previous session (section 9 rule 1) —
+        // last folder/file/position, Paused, no autoplay. The stdin loop
+        // below still runs, so the session can be driven or quit normally.
+        let _ = cmd_tx.send(Command::RestoreSession);
     }
 
     println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  q=quit");
@@ -146,6 +144,9 @@ fn run_ui(initial_path: Option<String>) {
 
     if let Some(p) = initial_path {
         let _ = cmd_tx.send(Command::OpenPath(PathBuf::from(p)));
+    } else {
+        // No argument: restore the previous session (section 9 rule 1).
+        let _ = cmd_tx.send(Command::RestoreSession);
     }
 
     window.run().expect("event loop failed");

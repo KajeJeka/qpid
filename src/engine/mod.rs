@@ -4,9 +4,11 @@
 //! atomics polled by the UI timer).
 //!
 //! Scope: OpenPath, Play, Pause, TogglePlay, SeekRelative, SeekAbsolute,
-//! SetSpeed (Phase 2: WSOLA stretcher through the flush path), Shutdown,
-//! and the flush/pause/release protocol. Next/Prev are accepted but are
-//! no-ops beyond what single-file playback needs until Phase 3 lands.
+//! SetSpeed (Phase 2: WSOLA stretcher through the flush path), Next/Prev
+//! (real navigation: natural-sorted playlist, advance_to handoff),
+//! RestoreSession (launch without args: last folder/file/position, paused,
+//! no autoplay), Shutdown, and the flush/pause/release protocol. Playback
+//! state is persisted through save_now (section 9 rule 5).
 
 #[path = "../playlist.rs"]
 pub mod playlist;
@@ -88,6 +90,7 @@ pub enum Command {
     SeekAbsolute(u64),
     Next,
     Prev,
+    RestoreSession,
     SetSpeed(Speed),
     Shutdown,
 }
@@ -408,16 +411,7 @@ fn handle_command(
                     // read while base/played still describe the old file.
                 }
             }
-            open_path(path, state, ctx, paused_since, shared, tx_events, 0, store, released_path);
-            // T3 probe wiring (controller ruling): populate the playlist
-            // from the opened file's folder so Next/Prev/EOF advance has
-            // something to navigate. T5 moves this inside open_path.
-            if let Some(opened) = ctx.as_ref().map(|c| c.path.clone()) {
-                if let Some(parent) = opened.parent() {
-                    *playlist = playlist::scan(parent);
-                    *idx = playlist::index_of(playlist, &opened).unwrap_or(0);
-                }
-            }
+            open_path(path, state, ctx, paused_since, shared, tx_events, 0, store, released_path, playlist, idx);
         }
 
         Command::Play => {
@@ -430,6 +424,8 @@ fn handle_command(
                     shared,
                     tx_events,
                     store,
+                    playlist,
+                    idx,
                 );
             } else if *state == PlayState::Ended {
                 if let Some(c) = ctx.as_mut() {
@@ -450,7 +446,7 @@ fn handle_command(
             match *state {
                 PlayState::Playing => pause(ctx, state, paused_since, shared, tx_events, store),
                 PlayState::Paused => {
-                    resume(ctx, state, paused_since, released_path, shared, tx_events, store)
+                    resume(ctx, state, paused_since, released_path, shared, tx_events, store, playlist, idx)
                 }
                 _ => {}
             }
@@ -497,6 +493,10 @@ fn handle_command(
                 shared.played_frames.store(0, Ordering::Relaxed);
                 if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
             }
+        }
+
+        Command::RestoreSession => {
+            restore_session(store, state, ctx, released_path, playlist, idx, shared, tx_events, paused_since);
         }
 
         Command::SetSpeed(speed) => {
@@ -582,10 +582,13 @@ fn open_path(
     resume_ms: u64, // 0 on a fresh open; a resume-after-release position
     store: &mut Store,
     released_path: &mut Option<PathBuf>,
+    playlist: &mut Vec<PathBuf>,
+    idx: &mut usize,
 ) {
     *paused_since = None;
 
-    let file_path = if path.is_dir() {
+    let was_dir = path.is_dir();
+    let mut file_path = if was_dir {
         match playlist::scan(&path).into_iter().next() {
             Some(p) => p,
             None => {
@@ -597,13 +600,49 @@ fn open_path(
         path
     };
 
+    // Section 9 restore rules 2/3: the playlist is the folder's sorted
+    // audio files; selection and start position come from the store.
+    let folder = file_path.parent().map(Path::to_path_buf).unwrap_or_default();
+    *playlist = playlist::scan(&folder);
+    if playlist.is_empty() {
+        // Opened file is outside the scan (hidden/system attribute or an
+        // extension the filter skips): keep a one-file playlist so
+        // track_event and advance_to never index an empty vec.
+        *playlist = vec![file_path.clone()];
+    }
+    *idx = playlist::index_of(playlist, &file_path).unwrap_or(0);
+    let folder_name = folder.to_string_lossy().to_string();
+    let fk = store::key(&folder_name);
+    if was_dir && resume_ms == 0 {
+        // Rule 2 pick: last_file if present and not done; else first
+        // not-done; else first. Single-file opens (rule 3) and
+        // resume-after-release (resume_ms > 0) keep the file as opened.
+        let pick = store.folders.get(&fk).map(|f| {
+            let last = &f.last_file;
+            let last_ok = playlist.iter().position(|p| {
+                p.file_name().map(|n| store::key(&n.to_string_lossy()) == *last).unwrap_or(false)
+            }).filter(|_| !f.files.get(last).map(|e| e.done).unwrap_or(false));
+            last_ok.or_else(|| playlist.iter().position(|p| {
+                f.files.get(&store::key(&p.file_name().unwrap_or_default().to_string_lossy()))
+                    .map(|e| !e.done).unwrap_or(false)
+            })).unwrap_or(0)
+        }).unwrap_or(0);
+        *idx = pick;
+        file_path = playlist[*idx].clone();
+    }
+    let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let size_on_disk = std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+    let saved_pos = store.position_for(&folder_name, &file_name, size_on_disk)
+        .saturating_sub(store::RESUME_REWIND_MS);
+    let start_pos = if resume_ms > 0 { resume_ms } else { saved_pos };
+
     match Decoder::open(&file_path) {
         Ok(decoder) => {
             let source_rate = decoder.sample_rate();
             shared
                 .duration_ms
                 .store(decoder.duration_ms().unwrap_or(0), Ordering::Relaxed);
-            shared.base_ms.store(resume_ms, Ordering::Relaxed);
+            shared.base_ms.store(start_pos, Ordering::Relaxed);
             shared.played_frames.store(0, Ordering::Relaxed);
             shared.eof.store(false, Ordering::Relaxed);
             shared.drained.store(false, Ordering::Relaxed);
@@ -624,15 +663,6 @@ fn open_path(
                             if resampler.is_bypassed() { "bypass" } else { "engaged" }
                         );
                     }
-                    let title = file_path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let folder = file_path
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-
                     *ctx = Some(PlaybackContext {
                         decoder,
                         output,
@@ -642,21 +672,15 @@ fn open_path(
                     });
 
                     if let Some(c) = ctx.as_mut() {
-                        if resume_ms > 0 {
-                            let _ = c.decoder.seek(resume_ms);
+                        if start_pos > 0 {
+                            let _ = c.decoder.seek(start_pos);
                         }
                         prefill(c, shared, PREROLL_MS);
                         c.output.play();
                     }
 
                     *state = PlayState::Playing;
-                    let _ = tx_events.send(Event::TrackChanged {
-                        folder,
-                        title,
-                        index: 1,
-                        count: 1,
-                        duration_ms: shared.duration_ms.load(Ordering::Relaxed),
-                    });
+                    let _ = tx_events.send(track_event(playlist, *idx, shared));
                     let _ = tx_events.send(Event::StateChanged(*state));
                     // Success supersedes any earlier release: a stale
                     // released_path would make the next trigger 4 / error
@@ -684,6 +708,69 @@ fn open_path(
             let _ = tx_events.send(Event::StateChanged(*state));
         }
     }
+}
+
+/// Launch without arguments: last folder, last file, saved position,
+/// stay Paused, do not autoplay (section 9 rule 1; acceptance test 6).
+fn restore_session(
+    store: &Store,
+    state: &mut PlayState,
+    ctx: &mut Option<PlaybackContext>,
+    released_path: &mut Option<PathBuf>,
+    playlist: &mut Vec<PathBuf>,
+    idx: &mut usize,
+    shared: &Arc<Shared>,
+    tx_events: &Sender<Event>,
+    paused_since: &mut Option<std::time::Instant>,
+) {
+    if store.last_folder.is_empty() {
+        return; // no history: stay Idle with defaults
+    }
+    let folder = std::path::PathBuf::from(&store.last_folder);
+    *playlist = playlist::scan(&folder);
+    if playlist.is_empty() {
+        return;
+    }
+    // Find the stored last_file (lowercase key) among the real names.
+    let wanted = store
+        .folders
+        .get(&store::key(&store.last_folder))
+        .map(|f| f.last_file.clone())
+        .unwrap_or_default();
+    let found = wanted
+        .is_empty()
+        .then_some(0)
+        .unwrap_or_else(|| {
+            playlist
+                .iter()
+                .position(|p| {
+                    p.file_name()
+                        .map(|n| store::key(&n.to_string_lossy()) == wanted)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(0)
+        });
+    *idx = found;
+    let path = playlist[*idx].clone();
+    // Size check (rule 2): mismatch -> position 0.
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    let mut pos = store.position_for(&store.last_folder, &path.file_name().unwrap_or_default().to_string_lossy(), size);
+    pos = pos.saturating_sub(store::RESUME_REWIND_MS); // rule 8
+    // Metadata-only duration probe: Decoder::open reads codec_params
+    // (duration comes free at open; no packets decoded) so the UI gets a
+    // real duration without touching audio (budget 2).
+    if let Ok(probe) = Decoder::open(&path) {
+        shared.duration_ms.store(probe.duration_ms().unwrap_or(0), Ordering::Relaxed);
+    }
+    *paused_since = Some(std::time::Instant::now()); // treat as paused now
+    shared.base_ms.store(pos, Ordering::Relaxed);
+    shared.played_frames.store(0, Ordering::Relaxed);
+    shared.speed_milli.store(store::speed_to_milli(store.speed), Ordering::Relaxed);
+    *released_path = Some(path); // Play -> resume() reopens at base_ms
+    *ctx = None;
+    *state = PlayState::Paused;
+    let _ = tx_events.send(track_event(playlist, *idx, shared));
+    let _ = tx_events.send(Event::StateChanged(*state));
 }
 
 /// Fill the ring from empty up to `target_ms` worth of audio. Used on open
@@ -996,6 +1083,8 @@ fn resume(
     shared: &Arc<Shared>,
     tx_events: &Sender<Event>,
     store: &mut Store,
+    playlist: &mut Vec<PathBuf>,
+    idx: &mut usize,
 ) {
     *paused_since = None;
 
@@ -1005,7 +1094,7 @@ fn resume(
     if ctx.is_none() {
         if let Some(path) = released_path.take() {
             let resume_ms = shared.base_ms.load(Ordering::Relaxed);
-            open_path(path, state, ctx, paused_since, shared, tx_events, resume_ms, store, released_path);
+            open_path(path, state, ctx, paused_since, shared, tx_events, resume_ms, store, released_path, playlist, idx);
         }
         return;
     }

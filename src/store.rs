@@ -6,8 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const SCHEMA_VERSION: u32 = 1;
-#[allow(dead_code)] // used from a later Phase 3 task (rule 8)
-pub const RESUME_REWIND_MS: u64 = 0; // section 9 rule 8
+pub const RESUME_REWIND_MS: u64 = 0; // section 9 rule 8, applied on restore
 const MAX_FOLDERS: usize = 100;       // section 9 rule 3
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
