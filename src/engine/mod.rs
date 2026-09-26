@@ -8,6 +8,8 @@
 //! and the flush/pause/release protocol. Next/Prev are accepted but are
 //! no-ops beyond what single-file playback needs until Phase 3 lands.
 
+#[path = "../playlist.rs"]
+pub mod playlist;
 #[path = "../store.rs"]
 pub mod store;
 pub mod decode;
@@ -430,9 +432,7 @@ fn open_path(
     *paused_since = None;
 
     let file_path = if path.is_dir() {
-        // Phase 1: no playlist yet. Phase 3 replaces this with a real scan
-        // (section 6 project layout: playlist.rs).
-        match first_audio_file_in(&path) {
+        match playlist::scan(&path).into_iter().next() {
             Some(p) => p,
             None => {
                 let _ = tx_events.send(Event::Message("No audio files in folder".into()));
@@ -518,28 +518,6 @@ fn open_path(
             let _ = tx_events.send(Event::StateChanged(*state));
         }
     }
-}
-
-fn first_audio_file_in(dir: &std::path::Path) -> Option<PathBuf> {
-    const EXTS: [&str; 7] = ["mp3", "m4a", "m4b", "aac", "flac", "ogg", "wav"];
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.extension()
-                .and_then(|e| e.to_str())
-                .map(|e| EXTS.contains(&e.to_lowercase().as_str()))
-                .unwrap_or(false)
-        })
-        .collect();
-    entries.sort_by(|a, b| {
-        natord::compare(
-            &a.file_name().unwrap_or_default().to_string_lossy(),
-            &b.file_name().unwrap_or_default().to_string_lossy(),
-        )
-    });
-    entries.into_iter().next()
 }
 
 /// Fill the ring from empty up to `target_ms` worth of audio. Used on open
