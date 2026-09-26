@@ -2,19 +2,25 @@
 
 Measured 2026-09-24, Windows 11 x64, release build, `tools/bench.py`.
 Test file: `test_audio/test.mp3` (44.1 kHz stereo MP3, ~60 min).
+Phase 3 budget re-checks (exe size, budget 6 spot-check) measured
+2026-09-26 — see rows 1/6 and the Phase 3 probes section.
 
 ## Budgets (architecture.md §2)
 
 | # | Budget | Target | Result | Verdict |
 |---|--------|--------|--------|---------|
-| 1 | Exe size | ≤ 10 MB | 10,379,776 B (9.90 MB) after the Phase 2 WSOLA (+4.6 KB) | **PASS** |
-| 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) | **PASS** |
+| 1 | Exe size | ≤ 10 MB | **10,443,264 B (9.96 MB)** — Phase 3 build (serde/store +22,016 B over the Phase 3 start baseline 10,421,248 B); Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
+| 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 3.35 MB | **PASS** |
 | 4 | USS, minimized, 1x | ≤ 15 MB | 5.39 MB | **PASS** |
 | 5 | CPU, minimized, 1x | ≤ 0.5% | 0.42% avg | **PASS** |
-| 6 | CPU, playing at 2x | ≤ 2% | 1.65–1.88% (3 runs; see scenario below) | **PASS** |
-| 7 | Paused > 10 s | 0.0% CPU | 0.00% avg over 30 s; USS 1.84 MB; handles −17 | **PASS** |
-| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released | **PASS** |
+| 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)** | **PASS** |
+| 7 | Paused > 10 s | 0.0% CPU | 0.00% avg over 30 s; USS 1.84 MB; handles −17 — **not re-run for Phase 3** | **PASS** |
+| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released — **not re-run for Phase 3** | **PASS** |
+
+Budgets 2/7/8 were not re-run for Phase 3: no design change since
+Phase 2 (no new threads; the 30 s checkpoint rides the existing wake,
+no new timer).
 
 Not measured: wakeups/s (9 — needs per-thread wakeup tooling to exclude
 the audio callback; not built yet).
@@ -53,25 +59,37 @@ saving only ~8 KB, so FFT stays at -O3 (see architecture.md §14).
 
 Thread count drops 11 → 8/9 after ~28 s (transient UI helper threads exit when minimized).
 
-### playing-2x-minimized (60 s, 2x, 3 runs, budget 6)
+### playing-2x-minimized (60 s, 2x, 5 runs, budget 6)
 
 | Run | avg CPU | max USS | max threads |
 |-----|---------|---------|-------------|
 | 1 | 1.88% | 3.34 MB | 7 |
 | 2 | 1.65% | 3.35 MB | 7 |
 | 3 | 1.87% | 3.57 MB | 7 |
+| 4 | 1.57% | — | 7 |
+| 5 | 1.77% | — | 7 |
 
-PASS vs ≤ 2% in all three runs, but the margin is thin (worst 1.88 vs
-2.00). Method: `--cli` mode — the harness presses `s` three times on
-stdin (1 → 1.25 → 1.5 → 2) before sampling, and the process is headless
-(`windows_subsystem = "windows"`, no window), so "minimized" is moot.
-UI mode cannot be automated for this scenario: the harness has no way to
-click the speed row, and the engine starts every process at 1x. The Slint
-thread's minimized cost is therefore excluded; idle-visible measures
-0.00%, so it should not change the verdict. Speed engagement was verified
-separately (CLI smoke below): position advanced at exactly 2.00x wall
-clock over 2 s, counted at the device callback, so the stretcher,
-resampler and ring all flowed at 2x.
+PASS vs ≤ 2% in all five runs. Spread verdict: the runs are identical
+config (same speed, file, build), so the 1.57–1.88 range (0.31 pp) is
+run-to-run measurement noise, not a speed-dependent effect. Run order
+(1.88 → 1.65 → 1.87 → 1.57 → 1.77) alternates with no monotonic trend,
+which argues against a thermal ramp; for reference, budget 5's
+same-config spread was larger (0.11–0.89). Plan against the worst
+observed number, **1.88%**, which leaves 0.12 pp (6%) of headroom.
+
+**Method / caveats:** `--cli` mode — the harness presses `s` three times
+on stdin (1 → 1.25 → 1.5 → 2) before sampling, and the process is
+headless (`windows_subsystem = "windows"`, no window), so "minimized" is
+moot. **This measurement excludes all UI thread cost** (no Slint window,
+no 500 ms position timer — the latter does not exist yet either). When
+Phase 4 wires the timer and the UI drives speed directly, this budget
+**must be re-verified in UI mode**: the thin 0.12 pp margin means even
+small added CPU can flip the verdict. UI mode cannot be automated for
+this scenario today (the harness has no way to click the speed row), so
+re-verification will need a UI-capable harness or a manual run. Speed
+engagement was verified separately (CLI smoke below): position advanced
+at exactly 2.00x wall clock over 2 s, counted at the device callback, so
+the stretcher, resampler and ring all flowed at 2x.
 
 ### paused-over-10s (11 s release wait, then 30 s sampling)
 
@@ -141,3 +159,37 @@ in 2000 ms; 0.5x: +295 ms in 600 ms), no jumps at the speed-change flushes,
 and pressing `n` at 1.25x drained to `StateChanged(Ended)` (EOF flush runs
 through the engaged stretcher). Release build exit 0. Human listening
 (pitch at each speed, clicks on speed change) still pending.
+
+## Phase 3 probes (playlist + persistence)
+
+All automated, release build, scripts in `$env:TEMP\opencode\` (not
+committed). Detail in `.superpowers/sdd/2026-09-26-phase3-playlist-persistence/`
+task reports.
+
+- **Mixed-rate advance (Task 3): PASS both directions.** 44.1k → 48k via
+  `n`: wall TrackChanged→Ended 30050 ms vs duration 30024 (ratio 1.0009;
+  wrong-resampler-config prediction would be +8.8%), final position 30024
+  exact. 48k → 44.1k via `P`: near-EOF segment 12360 ms wall vs correct
+  prediction 12582 (wrong config 14021) — wrong config excluded by
+  1661 ms. `TrackChanged` durations match each file.
+- **Restore probes A/B/C (Task 5): PASS.** A (fresh restore): saved
+  8022 ms → relaunch restored `position_ms = 8022`, `StateChanged(Paused)`,
+  no `Playing`, `state.json` schema as §9. B (no history): clean start,
+  `position_ms = 0`, no events, `state.json` recreated. C (corrupt
+  `state.json`): clean start, no events, exit 0.
+- **Acceptance 6 — kill while playing → relaunch (Task 6): PASS.**
+  Play 65 s (checkpoints at 30 s and 60 s) → `Stop-Process -Force` →
+  relaunch `--cli` with no path arg:
+  ```
+  [event] TrackChanged { folder: "...\\test_audio", title: "test", index: 3, count: 7, duration_ms: 600032 }
+  [event] StateChanged(Paused)
+  position_ms = 60012
+  ```
+  position 60012 ∈ [35000, 70000] (killed at ~65 s, last checkpoint 60 s,
+  ≤ 30 s loss per §9 rule 7), `StateChanged(Paused)` present, **no**
+  `StateChanged(Playing)`, same file (`test.mp3`) restored.
+- **Budget 1 re-check:** 10,443,264 B ≤ 10,485,760 PASS (see row 1).
+- **Budget 6 spot-check (Task 6):** one run, `playing-2x-minimized`,
+  60 s: avg CPU **1.63%**, max USS 3.42 MB, max threads 7 — CPU budget
+  (2.0%) PASS, memory PASS, thread PASS. Inside the Phase 2 1.57–1.88%
+  band; no regression.

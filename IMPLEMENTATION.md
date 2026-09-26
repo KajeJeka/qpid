@@ -39,7 +39,36 @@ environment — see "Unverified" below before trusting anything here).
   at each speed, clicks on speed change (§16 test 4). Thread budget
   revised to 12 in architecture.md §2.8 with the isolation evidence in
   BENCH.md; Slint and cpal stay as-is.
-- Phase 3 (playlist and persistence): not started.
+- Phase 3 (playlist and persistence): **build-verified**. Playlist
+  (`src/playlist.rs`: extension filter, hidden/system skip, natural sort,
+  `index_of`) with real Next/Prev and EOF handoff through `advance_to`
+  (stream reuse when the next file's rate matches, unconditional resampler
+  rebuild when it does not — both directions probe-verified). Store
+  (`src/store.rs`: §9 schema, atomic temp+rename save) with all 8 §9
+  rule-5 triggers wired through `save_now` plus the 30 s while-playing
+  checkpoint (rides the existing wake — no new thread/timer), and
+  `RestoreSession` restoring last folder/file/position Paused with no
+  autoplay (rules 1–3; probes A/B/C pass: fresh restore 8022 ms, no
+  history → clean start, corrupt `state.json` → clean start). Probes:
+  mixed-rate advance PASS both directions (wrong-config excluded by
+  1.2–3.0 s timing margins), acceptance 6 kill/relaunch PASS (killed at
+  ~65 s, relaunch restored `test.mp3` at `position_ms = 60012` ∈
+  [35000, 70000], `StateChanged(Paused)` only — no `Playing`). Budgets
+  re-checked: exe size **10,443,264 B** ≤ 10,485,760 PASS (Phase 3 start
+  was 10,421,248 B; +22,016 B for serde/store); budget 6 spot-check
+  **1.63%** ≤ 2% PASS (within the 1.57–1.88% Phase 2 band). 15/15 tests,
+  7 release warnings (baseline). Trigger table:
+
+  | # | §9 rule-5 trigger | Site(s) — real `grep 'save_now'` line numbers | reason |
+  |---|---|---|---|
+  | 1 | Pause (incl. TogglePlay→pause) | `src/engine/mod.rs:1069` | `pause` |
+  | 2 | Next | `mod.rs:467` (Next arm) → `mod.rs:980` inside `advance_to` (`mod.rs:963`); EOF handoff entry `mod.rs:311` (ramp=false) also saves here | `next/prev` |
+  | 3 | Prev | `mod.rs:486` (position > 5 s restart) + `mod.rs:488` (index step) → `mod.rs:980` inside `advance_to` | `prev restart` / `next/prev` |
+  | 4 | Open of another path | `mod.rs:407` (pre-open, old file's position) | `open of another path` |
+  | 5 | Speed change | `mod.rs:516` — after `speed_milli` store (`mod.rs:509`), so position and new speed both land | `speed change` |
+  | 6 | Exit | engine: `mod.rs:392` (Shutdown) + `mod.rs:275` (channel dropped); main: `src/main.rs:135-136` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:154-155` (UI: Shutdown then `join()`) | `app exit` |
+  | 7 | Error stop (2 sites) | `mod.rs:706` (file-open failure) + `mod.rs:1042` (`advance_to` no-playable-file arm) | `error stop` |
+  | 8 | 30 s while playing | `mod.rs:292` (checkpoint in the wake path, only when position changed) | `30s checkpoint` |
 - Phase 4 (UI): partially pre-wired (open file/folder, toggle play, event
   display, speed row) but the 500ms timer, seek slider, keyboard
   shortcuts, and minimize-driven timer suspension are NOT implemented.
@@ -117,6 +146,14 @@ possible during authoring.
   build.rs, unconditional), which is not installed. §4 note 4 explicitly
   sanctions "write a WSOLA stretcher (about 150 lines)" as the fallback;
   that is what `src/engine/dsp.rs` implements.
+- **§6.9 packet-level decode-error skip remains deferred (Phase 3).** An
+  unreadable file at open forwards to the next playable file inside
+  `advance_to` (Error only when none is left), but a decode error on an
+  already-playing file still just stops the current `decode_burst` refill
+  and the next refill retries (Phase 1 behavior) — "skip the packet" is
+  not implemented. The `decode_burst` Err-branch comment in
+  `src/engine/mod.rs` now says exactly that (was stale, claimed the
+  packet skip was landing in Phase 3).
 
 ## Measurement status
 
@@ -131,3 +168,13 @@ Phase 1 exit is fully closed:
 3. Budgets 1–8 all PASS. Thread budget (8) was measured FAIL at 11 vs 4;
    isolation recorded in `BENCH.md` (Slint floor 9, CLI floor 7) and the
    budget was revised to **12** in architecture.md §2.8.
+
+Phase 3 verification status: all three probes (mixed-rate advance,
+restore A/B/C, acceptance 6 kill/relaunch) are automated and PASS — see
+`BENCH.md` "Phase 3 probes" and the task reports. **Acceptance 6:**
+killed at ~65 s while playing → relaunch with no path arg restored
+`test.mp3` at `position_ms = 60012` (bound [35000, 70000]; last
+checkpoint at 60 s, 30 s max loss per §9 rule 7), `StateChanged(Paused)`
+emitted, no `StateChanged(Playing)`. No new human-only checks for
+Phase 3: §15.3 has no listening criteria for playlist/persistence; the
+Phase 1/2 listening items above are unchanged.

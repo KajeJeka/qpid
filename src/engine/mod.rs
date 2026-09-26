@@ -794,9 +794,11 @@ fn decode_burst(ctx: &mut PlaybackContext, shared: &Arc<Shared>, target_ms: u64)
                 return;
             }
             Err(_e) => {
-                // Phase 1: stop this burst on a decode error. Phase 3 adds
-                // the "skip bad packet / skip to next file" behavior from
-                // section 6.9 instead of just stopping.
+                // File-level skip (section 6.9) lives in advance_to: an
+                // unreadable file at open forwards to the next candidate and
+                // Error is only reported when none is playable. Per-packet
+                // skipping remains deferred — a decode error just stops this
+                // burst and the next refill retries (Phase 1 behavior).
                 return;
             }
         }
