@@ -227,7 +227,7 @@ The stream is stopped, so the callback cannot drain the ring. Do not use the pro
 
 ## 9. Persistence
 
-Location: `%LOCALAPPDATA%\hush\state.json`. Read it with `std::env::var("LOCALAPPDATA")`. No extra crate.
+Location: `%LOCALAPPDATA%\qpid\state.json`. Read it with `std::env::var("LOCALAPPDATA")`. No extra crate.
 
 Schema:
 
@@ -331,7 +331,7 @@ Every rule is mandatory.
 ## 13. Project layout
 
 ```
-hush/
+q-pid/
   Cargo.toml
   build.rs
   app.manifest

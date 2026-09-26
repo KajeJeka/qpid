@@ -8,6 +8,8 @@
 //! and the flush/pause/release protocol. Next/Prev are accepted but are
 //! no-ops beyond what single-file playback needs until Phase 3 lands.
 
+#[path = "../store.rs"]
+pub mod store;
 pub mod decode;
 pub mod dsp;
 pub mod output;
@@ -184,6 +186,16 @@ struct PlaybackContext {
 /// timer polls directly.
 pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>) {
     lower_thread_priority();
+
+    // Loaded here (section 5.2: engine owns persistence). Wire-up of the
+    // triggers lands in a later task; loading now links serde and lets the
+    // exe-size gate be measured before anything builds on it.
+    let mut store = store::load();
+    // deliberately trivial use; keep binding live (block scopes the lint allow)
+    #[allow(dead_code)]
+    {
+        store.speed = store.speed;
+    }
 
     let mut state = PlayState::Idle;
     let mut ctx: Option<PlaybackContext> = None;
