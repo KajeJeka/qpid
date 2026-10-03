@@ -9,7 +9,7 @@ name = "qpid"
 path = "src/main.rs"
 
 [dependencies]
-slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software"] }
+slint = { version = "=1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "unstable-winit-030"] }
 cpal = "0.15"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "flac", "vorbis", "ogg", "wav", "pcm", "alac"] }
 rubato = "0.15"

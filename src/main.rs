@@ -2,6 +2,7 @@
 
 mod engine;
 mod ui;
+mod winit_hook;
 
 use std::io::BufRead;
 use std::path::PathBuf;
@@ -137,6 +138,7 @@ fn run_cli(initial_path: Option<String>) {
 }
 
 fn run_ui(initial_path: Option<String>) {
+    winit_hook::install();
     let (cmd_tx, evt_rx, shared, engine) = spawn_engine();
 
     let window = MainWindow::new().expect("failed to create UI window");
