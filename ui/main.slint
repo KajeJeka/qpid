@@ -96,10 +96,10 @@ component SeekSlider inherits Rectangle {
         width: 100%;
         height: 100%;
         pointer-event(event) => {
-            if (event.button != PointerEventButton.left) {
-                return;
-            }
             if (event.kind == PointerEventKind.down) {
+                if (event.button != PointerEventButton.left) {
+                    return;
+                }
                 root.is-dragging = true;
                 root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
                 root.dragging(true);
@@ -109,7 +109,12 @@ component SeekSlider inherits Rectangle {
                 }
             } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                 if (root.is-dragging) {
-                    root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
+                    if (event.kind == PointerEventKind.up) {
+                        if (event.button != PointerEventButton.left) {
+                            return;
+                        }
+                        root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
+                    }
                     root.is-dragging = false;
                     root.dragging(false);
                     root.commit(root.drag-value);
