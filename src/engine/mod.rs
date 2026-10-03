@@ -536,6 +536,9 @@ fn seek_to(
     state: &mut PlayState,
     shared: &Arc<Shared>,
 ) {
+    if cfg!(debug_assertions) {
+        eprintln!("[seek] -> {target_ms} (state {state:?})");
+    }
     let dur = shared.duration_ms.load(Ordering::Relaxed);
     let clamped = if dur > 0 {
         target_ms.min(dur.saturating_sub(1000))

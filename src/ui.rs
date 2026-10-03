@@ -30,6 +30,16 @@ fn format_time(ms: u64) -> String {
     }
 }
 
+/// Spec 4.3: commit = fraction × duration, rounded. Duration 0 (unknown)
+/// yields 0 and the slider is disabled anyway (section 7 rule 7); the
+/// engine re-clamps (section 7 rule 3).
+fn fraction_to_ms(fraction: f32, duration_ms: u64) -> u64 {
+    if duration_ms == 0 {
+        return 0;
+    }
+    (fraction.clamp(0.0, 1.0) * duration_ms as f32).round() as u64
+}
+
 thread_local! {
     static TC: RefCell<Option<TimerControl>> = RefCell::new(None);
 }
@@ -206,12 +216,36 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     }
     {
         let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
+        let shared_for_seek = Arc::clone(&shared);
         window.on_seek_to(move |fraction| {
-            // Phase 1: duration may be 0 (unknown), in which case this is a
-            // no-op seek to 0. Phase 4 disables slider dragging when
-            // duration is unknown (section 10.6/7).
-            let _ = fraction;
-            let _ = cmd_tx.send(Command::SeekAbsolute(0));
+            let dur = shared_for_seek.duration_ms.load(Ordering::Relaxed);
+            if dur == 0 {
+                return; // slider is disabled at duration 0 (belt and braces)
+            }
+            let ms = fraction_to_ms(fraction, dur);
+            // Spec 4.3: commit on release — reflect it immediately so the
+            // bar doesn't snap back to the pre-seek engine value while the
+            // engine flushes; the next tick writes the engine truth.
+            if let Some(window) = weak.upgrade() {
+                window.set_seek_fraction(fraction);
+            }
+            with_tc(|tc| {
+                if let Some(t) = tc {
+                    t.last_frac = fraction;
+                }
+            });
+            let _ = cmd_tx.send(Command::SeekAbsolute(ms));
+        });
+    }
+    {
+        window.on_seek_dragging(|changed| {
+            // Spec 4.3 drag guard: while true, refresh() skips seek-fraction.
+            with_tc(|tc| {
+                if let Some(t) = tc {
+                    t.dragging = changed;
+                }
+            });
         });
     }
     {
@@ -297,6 +331,31 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
 #[cfg(test)]
 mod tests {
     use super::format_time;
+    use super::fraction_to_ms;
+
+    #[test]
+    fn fraction_zero_and_full() {
+        assert_eq!(fraction_to_ms(0.0, 1000), 0);
+        assert_eq!(fraction_to_ms(1.0, 999), 999);
+    }
+
+    #[test]
+    fn fraction_rounds_to_nearest_ms() {
+        assert_eq!(fraction_to_ms(0.5, 1000), 500);
+        assert_eq!(fraction_to_ms(0.333_333_34, 1000), 333);
+        assert_eq!(fraction_to_ms(0.666_5, 1000), 667);
+    }
+
+    #[test]
+    fn fraction_clamps_out_of_range() {
+        assert_eq!(fraction_to_ms(2.0, 1000), 1000);
+        assert_eq!(fraction_to_ms(-1.0, 1000), 0);
+    }
+
+    #[test]
+    fn fraction_zero_duration_is_zero() {
+        assert_eq!(fraction_to_ms(0.5, 0), 0);
+    }
 
     #[test]
     fn format_time_zero() {

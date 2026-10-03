@@ -1,4 +1,4 @@
-import { Button, Slider, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { HorizontalBox, VerticalBox } from "std-widgets.slint";
 
 // -----------------------------------------------------------------------
 // Design tokens (section 10). Brand accent is green on near-black, per
@@ -60,6 +60,62 @@ component SpeedSegment inherits Rectangle {
         font-weight: active ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;
+    }
+}
+
+// Flat fraction slider (spec 4.4): drag state is exposed via `dragging`,
+// commit fires once on release (or click), and `enabled: false` (duration
+// unknown) blocks all pointer events. Modeled on slint's own slider-base.
+component SeekSlider inherits Rectangle {
+    in property <float> fraction: 0.0;
+    in property <bool> enabled: true;
+    callback dragging(value-changed: bool);
+    callback commit(value: float);
+
+    private property <float> drag-value: 0.0;
+    private property <bool> is-dragging: false;
+    private property <float> shown: root.is-dragging ? root.drag-value : root.fraction;
+
+    height: 16px;
+    background: Tokens.divider;
+    border-radius: 4px;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    // Fill
+    Rectangle {
+        x: 0;
+        y: 0;
+        width: parent.width * root.shown;
+        height: parent.height;
+        background: Tokens.accent;
+        border-radius: 4px;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        width: 100%;
+        height: 100%;
+        pointer-event(event) => {
+            if (event.button != PointerEventButton.left) {
+                return;
+            }
+            if (event.kind == PointerEventKind.down) {
+                root.is-dragging = true;
+                root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
+                root.dragging(true);
+            } else if (event.kind == PointerEventKind.move) {
+                if (root.is-dragging) {
+                    root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
+                }
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                if (root.is-dragging) {
+                    root.drag-value = clamp(touch.mouse-x / max(root.width, 1px), 0.0, 1.0);
+                    root.is-dragging = false;
+                    root.dragging(false);
+                    root.commit(root.drag-value);
+                }
+            }
+        }
     }
 }
 
@@ -191,12 +247,12 @@ export component MainWindow inherits Window {
                 font-size: 11px;
                 vertical-alignment: center;
             }
-            Slider {
+            SeekSlider {
                 horizontal-stretch: 1;
-                minimum: 0;
-                maximum: 1000;
-                value: root.seek-fraction * 1000;
-                released(v) => { root.seek-to(v / 1000); }
+                fraction: root.seek-fraction;
+                enabled: root.seek-enabled;
+                dragging(changed) => { root.seek-dragging(changed); }
+                commit(value) => { root.seek-to(value); }
             }
             Text {
                 text: root.duration-text;
