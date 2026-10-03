@@ -85,6 +85,7 @@ export component MainWindow inherits Window {
     in property <bool> has-track: false;
     in property <string> status-text: "";
     in property <int> speed-index: 1; // 0=0.5x 1=1x 2=1.25x 3=1.5x 4=2x
+    in property <bool> seek-enabled: false;
 
     // ---- commands to Rust (Phase 4 wires these; no-ops in Phase 0/1) ----
     callback open-file();
@@ -96,6 +97,7 @@ export component MainWindow inherits Window {
     callback prev-track();
     callback set-speed(int);
     callback seek-to(float);
+    callback seek-dragging(value-changed: bool);
 
     VerticalBox {
         padding: 20px;

@@ -4,17 +4,141 @@
 //!
 //! Phase 0/1 scope: enough wiring to open a file/folder and toggle play so
 //! the skeleton is visually operable, plus displaying events as they arrive.
-//! Phase 2 added the speed row (the engine's SetSpeed is live). The 500ms
-//! position timer, seek slider, keyboard shortcuts, and minimize/occlusion
-//! timer suspension are Phase 4 scope (section 15) and are NOT implemented
-//! here yet.
+//! Phase 2 added the speed row (the engine's SetSpeed is live). Phase 4
+//! wires the 500 ms position timer (spec 4.3: runs only while playing &&
+//! window visible, stopped by pause/minimize), the seek slider drag guard,
+//! and the visibility sink from src/winit_hook.rs.
 
+use std::cell::RefCell;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::engine::{Command, Event, Shared};
 use crate::MainWindow;
 use slint::ComponentHandle;
+
+/// Section 10 rule 4: `M:SS` under an hour, `H:MM:SS` at or above.
+fn format_time(ms: u64) -> String {
+    let total = ms / 1000;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+thread_local! {
+    static TC: RefCell<Option<TimerControl>> = RefCell::new(None);
+}
+
+fn with_tc<R>(f: impl FnOnce(&mut Option<TimerControl>) -> R) -> R {
+    TC.with(|c| f(&mut c.borrow_mut()))
+}
+
+/// Owns the single sanctioned slint::Timer (spec 4.3) and both of its
+/// start/stop conditions. Lives in a thread_local so it outlives wire()
+/// and stays on the event-loop thread (Timer is !Send).
+struct TimerControl {
+    timer: slint::Timer,
+    weak: slint::Weak<MainWindow>,
+    shared: Arc<Shared>,
+    playing: bool,
+    visible: bool,
+    dragging: bool, // Task 3 sets it from the slider; tick skips seek-fraction
+    running: bool,
+    last_elapsed: String,
+    last_duration: String,
+    last_frac: f32,
+}
+
+impl TimerControl {
+    fn new(weak: slint::Weak<MainWindow>, shared: Arc<Shared>) -> Self {
+        Self {
+            timer: slint::Timer::default(),
+            weak,
+            shared,
+            playing: false,
+            visible: true,
+            dragging: false,
+            running: false,
+            last_elapsed: String::new(),
+            last_duration: String::new(),
+            last_frac: 0.0,
+        }
+    }
+
+    fn set_playing(&mut self, playing: bool) {
+        self.playing = playing;
+        self.recompute();
+    }
+
+    fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+        self.recompute();
+    }
+
+    /// Spec 4.3: start iff playing && visible; stop otherwise. Starting a
+    /// running timer (or stopping a stopped one) is a no-op via `running`.
+    fn recompute(&mut self) {
+        if self.playing && self.visible {
+            if !self.running {
+                self.running = true;
+                self.timer.start(slint::TimerMode::Repeated, Duration::from_millis(500), || {
+                    with_tc(|tc| {
+                        if let Some(t) = tc {
+                            t.tick();
+                        }
+                    });
+                });
+            }
+        } else if self.running {
+            self.running = false;
+            self.timer.stop();
+        }
+    }
+
+    fn tick(&mut self) {
+        #[cfg(debug_assertions)]
+        eprintln!("[tick]");
+        self.refresh();
+    }
+
+    /// One shared read, three display writes, each only when the displayed
+    /// value changed (section 11 rule 5). seek-fraction is skipped while
+    /// the user drags (spec 4.3 / section 10 rule 2).
+    fn refresh(&mut self) {
+        let pos = self.shared.position_ms();
+        let dur = self.shared.duration_ms.load(Ordering::Relaxed);
+        let elapsed = format_time(pos);
+        let duration = if dur == 0 { String::new() } else { format_time(dur) };
+        let frac = if dur == 0 {
+            0.0
+        } else {
+            (pos as f64 / dur as f64).clamp(0.0, 1.0)
+        } as f32;
+
+        let Some(window) = self.weak.upgrade() else { return };
+
+        if elapsed != self.last_elapsed {
+            window.set_elapsed_text(elapsed.clone().into());
+            self.last_elapsed = elapsed;
+        }
+        if duration != self.last_duration {
+            window.set_duration_text(duration.clone().into());
+            // Section 7 rule 7: duration 0 = slider disabled, text blank;
+            // elapsed keeps showing (it is written by the branch above).
+            window.set_seek_enabled(dur > 0);
+            self.last_duration = duration;
+        }
+        if !self.dragging && frac != self.last_frac {
+            window.set_seek_fraction(frac);
+            self.last_frac = frac;
+        }
+    }
+}
 
 pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event>, shared: Arc<Shared>) {
     // Open file / open folder: the two entry points required by Phase 0/1.
@@ -104,7 +228,19 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
         });
     }
 
-    let _ = shared; // Phase 4 wires the 500ms position timer against this.
+    // Spec 4.3: the timer's state lives in a thread_local so both the
+    // visibility sink (event-loop thread) and the drain (via
+    // invoke_from_event_loop) can drive it.
+    with_tc(|slot| {
+        *slot = Some(TimerControl::new(window.as_weak(), Arc::clone(&shared)));
+    });
+    crate::winit_hook::set_sink(|visible| {
+        with_tc(|tc| {
+            if let Some(t) = tc {
+                t.set_visible(visible);
+            }
+        });
+    });
 
     // Drain engine events and reflect the minimal ones Phase 0/1 cares
     // about (title/status) onto the window. Position/slider/time-text
@@ -130,13 +266,69 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
                         window.set_has_track(true);
                     }
                     Event::StateChanged(state) => {
-                        window.set_is_playing(matches!(state, crate::engine::PlayState::Playing));
+                        let playing = matches!(state, crate::engine::PlayState::Playing);
+                        window.set_is_playing(playing);
+                        with_tc(|tc| {
+                            if let Some(t) = tc {
+                                t.set_playing(playing);
+                            }
+                        });
                     }
                     Event::Message(msg) => {
                         window.set_status_text(msg.into());
                     }
                 }
+                // Any event can change the displayed position/duration
+                // (open, restore, seek, advance): refresh once even while
+                // the timer is stopped, so a paused restore shows real
+                // times immediately (spec 4.3).
+                with_tc(|tc| {
+                    if let Some(t) = tc {
+                        t.refresh();
+                    }
+                });
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_time;
+
+    #[test]
+    fn format_time_zero() {
+        assert_eq!(format_time(0), "0:00");
+    }
+
+    #[test]
+    fn format_time_under_a_minute() {
+        assert_eq!(format_time(59_000), "0:59");
+    }
+
+    #[test]
+    fn format_time_minute_boundary() {
+        assert_eq!(format_time(60_000), "1:00");
+        assert_eq!(format_time(75_000), "1:15");
+    }
+
+    #[test]
+    fn format_time_just_under_an_hour() {
+        assert_eq!(format_time(3_599_000), "59:59");
+    }
+
+    #[test]
+    fn format_time_hour_boundary() {
+        assert_eq!(format_time(3_600_000), "1:00:00");
+    }
+
+    #[test]
+    fn format_time_over_an_hour() {
+        assert_eq!(format_time(3_661_000), "1:01:01");
+    }
+
+    #[test]
+    fn format_time_long_track() {
+        assert_eq!(format_time(36_000_000), "10:00:00");
+    }
 }
