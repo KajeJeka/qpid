@@ -65,7 +65,9 @@ impl TimerControl {
             dragging: false,
             running: false,
             last_elapsed: String::new(),
-            last_duration: String::new(),
+            // Mirrors the .slint default duration-text ("0:00") so the first
+            // dur==0 refresh sees a change and blanks it (section 7 rule 7).
+            last_duration: "0:00".into(),
             last_frac: 0.0,
         }
     }
