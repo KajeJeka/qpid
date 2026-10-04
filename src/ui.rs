@@ -258,19 +258,28 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     // Spec 4.4: one source of truth for the segment index; both the
     // segment buttons and the [ ] step binding go through it.
     let speed_index = Rc::new(Cell::new(1i32)); // window default is 1 (1x)
+    // Shared sync sequence (send -> step source -> UI property). Clamping
+    // stays at each call site: set clamps, step uses clamp_step.
+    fn apply_speed(
+        cmd_tx: &Sender<Command>,
+        weak: &slint::Weak<MainWindow>,
+        speed_index: &Cell<i32>,
+        index: i32,
+    ) {
+        let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
+            index as u32,
+        )));
+        speed_index.set(index);
+        if let Some(window) = weak.upgrade() {
+            window.set_speed_index(index);
+        }
+    }
     {
         let cmd_tx = cmd_tx.clone();
         let weak = window.as_weak();
         let speed_index = Rc::clone(&speed_index);
         window.on_set_speed(move |index| {
-            let index = index.clamp(0, 4);
-            let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
-                index as u32,
-            )));
-            speed_index.set(index);
-            if let Some(window) = weak.upgrade() {
-                window.set_speed_index(index);
-            }
+            apply_speed(&cmd_tx, &weak, &speed_index, index.clamp(0, 4));
         });
     }
     {
@@ -278,14 +287,12 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
         let weak = window.as_weak();
         let speed_index = Rc::clone(&speed_index);
         window.on_step_speed(move |delta| {
-            let index = clamp_step(speed_index.get(), delta);
-            let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
-                index as u32,
-            )));
-            speed_index.set(index);
-            if let Some(window) = weak.upgrade() {
-                window.set_speed_index(index);
-            }
+            apply_speed(
+                &cmd_tx,
+                &weak,
+                &speed_index,
+                clamp_step(speed_index.get(), delta),
+            );
         });
     }
 
