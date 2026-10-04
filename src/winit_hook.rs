@@ -50,8 +50,9 @@ impl Hook {
     }
 
     /// Spec 4.2: visible = !minimized && !occluded && size != (0,0).
-    /// Emitted only on transitions; the first evaluation seeds silently
-    /// (the window starts visible).
+    /// Emitted on every change, including the first evaluation: the
+    /// startup seed (visible=true) is emitted too, because `last_visible`
+    /// starts as None (probe: 5 `[vis]` lines per run, not 4).
     fn evaluate(&mut self, window: &winit::window::Window) {
         let size = window.inner_size();
         let minimized = window.is_minimized().unwrap_or(false);

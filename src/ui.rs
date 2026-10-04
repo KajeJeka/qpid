@@ -310,9 +310,10 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
         });
     });
 
-    // Drain engine events and reflect the minimal ones Phase 0/1 cares
-    // about (title/status) onto the window. Position/slider/time-text
-    // updates are Phase 4.
+    // Drain engine events and reflect them onto the window: track/title/
+    // status changes directly, plus one trailing refresh() so position,
+    // slider and time text update on every event even while the timer is
+    // stopped (spec 4.3).
     let weak = window.as_weak();
     std::thread::spawn(move || {
         while let Ok(event) = evt_rx.recv() {

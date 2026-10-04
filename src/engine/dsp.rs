@@ -312,10 +312,14 @@ impl Resampler {
             ) {
                 Ok(r) => Some(r),
                 Err(e) => {
-                    // Engine thread, not the audio callback, so a log is fine.
-                    eprintln!(
-                        "[qpid] resampler {source_rate}->{device_rate} failed: {e}; playing uncorrected"
-                    );
+                    // Engine thread, not the audio callback, so a log is
+                    // fine — but debug-only (global rule 10: no un-gated
+                    // logging reachable in release UI mode).
+                    if cfg!(debug_assertions) {
+                        eprintln!(
+                            "[qpid] resampler {source_rate}->{device_rate} failed: {e}; playing uncorrected"
+                        );
+                    }
                     None
                 }
             }

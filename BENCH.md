@@ -4,26 +4,45 @@ Measured 2026-09-24, Windows 11 x64, release build, `tools/bench.py`.
 Test file: `test_audio/test.mp3` (44.1 kHz stereo MP3, ~60 min).
 Phase 3 budget re-checks (exe size, budget 6 spot-check) measured
 2026-09-26 — see rows 1/6 and the Phase 3 probes section.
+Phase 4 measurements (UI wiring) taken 2026-10-03; budget
+re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
+"Phase 4" rows and the Phase 4 probes section.
 
 ## Budgets (architecture.md §2)
 
 | # | Budget | Target | Result | Verdict |
 |---|--------|--------|--------|---------|
-| 1 | Exe size | ≤ 10 MB | **10,443,264 B (9.96 MB)** — Phase 3 build (serde/store +22,016 B over the Phase 3 start baseline 10,421,248 B); Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
-| 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3** | **PASS** |
-| 3 | USS, visible, 1x | ≤ 25 MB | 3.35 MB | **PASS** |
-| 4 | USS, minimized, 1x | ≤ 15 MB | 5.39 MB | **PASS** |
-| 5 | CPU, minimized, 1x | ≤ 0.5% | 0.42% avg | **PASS** |
-| 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)** | **PASS** |
-| 7 | Paused > 10 s | 0.0% CPU | 0.00% avg over 30 s; USS 1.84 MB; handles −17 — **not re-run for Phase 3** | **PASS** |
-| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released — **not re-run for Phase 3** | **PASS** |
+| 1 | Exe size | ≤ 10 MB | **10,418,176 B (9.94 MB)** — Phase 4 final build (after the rule-10 debug guard; Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
+| 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
+| 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
+| 4 | USS, minimized, 1x | ≤ 15 MB | 5.86 MB — Phase 4 fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
+| 5 | CPU, minimized, 1x | ≤ 0.5% | 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see budget-5 note below** | UNSTABLE (0.44–0.98%, see note) |
+| 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)** | **PASS** |
+| 7 | Paused > 10 s | 0.0% CPU | 0.00% avg over 60 s (Phase 4 `--cli` re-run, 2026-10-04, `bench_results/paused-over-10s.csv`; 30 s run also 0.00%); USS 1.84 MB; handles −17; **Phase 4 ended >10 s: 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s** (Task 5 probe) | **PASS** |
+| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released — **not re-run for Phase 3 or 4** (Phase 4 minimized runs also showed 11) | **PASS** |
+| 9 | Wakeups/s, background | ≤ 2/s | 0.529/s primary (debug UI binary minimized, 38 wakes / 71.8 s) + 0.533/s cross-check (release `--cli`, 32 wakes / 60 s) — engine counter method, see Phase 4 probes | **PASS** |
 
 Budgets 2/7/8 were not re-run for Phase 3: no design change since
 Phase 2 (no new threads; the 30 s checkpoint rides the existing wake,
-no new timer).
+no new timer). Phase 4 re-measured budgets 1/3/4/5/7/9 (rows above);
+budgets 2/6/8 were not re-run as full scenarios for Phase 4 (budget 6
+has a single-run control, row 6).
 
-Not measured: wakeups/s (9 — needs per-thread wakeup tooling to exclude
-the audio callback; not built yet).
+**Budget 5 note (Phase 4 human ruling, measured 2026-10-04):**
+interleaved A/B, n=4 each, run order base/head/base/head/…:
+
+| build | min | median | max | mean |
+|---|---|---|---|---|
+| Phase 4 base `1466e19` | 0.44% | 0.67% | 0.82% | 0.650% |
+| Phase 4 head `46923c5` | 0.58% | 0.70% | 0.98% | 0.741% |
+
+Δ of medians 0.03 pp; Δ of means 0.09 pp; base itself fails the ≤0.5%
+gate 3/4 today. Root cause: heterogeneous-CPU scheduler variance on a
+bursty workload (i5-12450HX 4P+4E); historical same-config spread in
+this file was already 0.11–0.89 incl. a prior 0.59% FAIL noted as
+variance. Controls on 2026-10-04: budget 6 2x = 1.82% PASS, budget 7
+paused = 0.00% PASS. Attribution: NOT a Phase 4 contributor (controller
+interleaved A/B above).
 
 ## Scenarios
 
@@ -193,3 +212,54 @@ task reports.
   60 s: avg CPU **1.63%**, max USS 3.42 MB, max threads 7 — CPU budget
   (2.0%) PASS, memory PASS, thread PASS. Inside the Phase 2 1.57–1.88%
   band; no regression.
+
+## Phase 4 probes (UI wiring)
+
+All automated (except the items marked human), debug build for the
+`[vis]`/`[tick]` probes and release for the rest, scripts in
+`$env:TEMP\opencode\` (not committed). Probes taken 2026-10-03; budget
+re-measurements 2026-10-04. Detail in
+`.superpowers/sdd/2026-10-03-phase4-ui/` task reports.
+
+- **Visibility probe (Task 1):** minimize/restore ×2 produced 4 `[vis]`
+  transitions (5 `[vis]` lines in total including the startup seed); the
+  transition trio showed
+  `[vis] min=false occ=false size=600x400 -> visible=true` →
+  `[vis] min=true occ=false size=0x0 -> visible=false` →
+  `[vis] min=false occ=false size=600x400 -> visible=true`
+  — Windows emitted **zero-size** on minimize (`is_minimized=true` and
+  `size=0x0`; `occluded` stayed false and no `WindowEvent::Occluded` was
+  ever emitted — zero `[vis] occluded-event` lines).
+- **Timer stop (Tasks 2 + 4):** 0 `[tick]` lines over 30 s minimized while
+  playing (15 ticks counted while playing before the minimize; 8 ticks
+  in the 4 s after restore); 0 over 30 s paused (`save (pause)` confirms
+  the pause; focus assert `True`); ticks resumed after restore (8 in 4 s
+  ≥ 4 expected). Debug build; spec §5 must-hold.
+- **Ended release (Task 5):** `[release] Ended stream+decoder released`
+  printed (True); handles 202 → 185; CPU 0 s over the 15 s
+  fully-released window (t=47..62, gate ≤ 0.05); post-release wake rate
+  0/s (wakes 28 → 28 over 15.1 s); restart via TogglePlay reopened the
+  file (TrackChanged ×2) and positioned at 1950 ms (< 10 s expected).
+- **Budget 9 method (0.529/s primary, 0.533/s cross-check):**
+  Self-instrumented engine-loop wake counter (`Shared.wakes`, one
+  increment per loop iteration); primary reading from the actual debug UI
+  binary minimized ≥70 s (measured 71.8 s) via the env-gated file sink;
+  cross-check from the release `--cli` build over 60 s; excludes the
+  audio callback by design; UI timer contributes 0 while minimized/paused
+  (Task 2/4 probes: 0 `[tick]` over 30 s each); Limitation: counts
+  engine-loop iterations, not OS-level wakeups, and does not directly
+  count winit event-loop/COM helper threads — bounded by the measured
+  CPU of the same minimized release run (budgets 3/4/5); a wakeup
+  arriving while a thread is already awake is not distinguished.
+- **Path-arg acceptance (Task 6):** `qpid.exe "C:\Users\Luiz\Desktop\gabriel\projetos_python\q-pid\test_audio\test.mp3"`
+  (absolute path) — window
+  opened (True), CPU 0.06 s over 5 s (autoplay), closed cleanly via
+  WM_CLOSE (True); all three expectations met. Caveat: the 0.05 s CPU
+  gate clears by only 0.01 s — bench's visible steady-state (~0.028
+  CPU-s per 5 s) sits below it, so the check leans on early decode
+  activity and could flake on a quieter machine.
+- **Keyboard probe (Task 4):** focus failures 0; Space → pause save 1/1;
+  Right → `[seek]` line 1/1; Ctrl+O → dialog opened (True); N → next
+  save 1/1 (input file `test.mp3` — `tone48k_60m.mp3` sorts last, where
+  Next is a designed no-op). `[`/`]` speed step and Ctrl+Shift+O: human
+  checklist.

@@ -69,10 +69,24 @@ environment — see "Unverified" below before trusting anything here).
   | 6 | Exit | engine: `mod.rs:392` (Shutdown) + `mod.rs:275` (channel dropped); main: `src/main.rs:135-136` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:154-155` (UI: Shutdown then `join()`) | `app exit` |
   | 7 | Error stop (2 sites) | `mod.rs:706` (file-open failure) + `mod.rs:1042` (`advance_to` no-playable-file arm) | `error stop` |
   | 8 | 30 s while playing | `mod.rs:292` (checkpoint in the wake path, only when position changed) | `30s checkpoint` |
-- Phase 4 (UI): partially pre-wired (open file/folder, toggle play, event
-  display, speed row) but the 500ms timer, seek slider, keyboard
-  shortcuts, and minimize-driven timer suspension are NOT implemented.
-  Do not consider Phase 4 started; this is scaffolding only.
+- Phase 4 (UI): **build-verified**. The 500 ms position timer runs only
+  while playing && window visible (winit `CustomApplicationHandler` hook in
+  `src/winit_hook.rs` — the only unstable-API file; slint pinned `=1.18.1`),
+  stopped by pause/minimize/occlusion (probe: 0 ticks over 30 s in each
+  condition). Seek slider with drag-vs-commit and disabled-at-duration-0
+  (custom `TouchArea` slider — the std Slider cannot expose drag state).
+  Keyboard: Space/←/→/N/P/[/]/Ctrl+O/Ctrl+Shift+O via one FocusScope (probe:
+  Space, arrows, Ctrl+O, N observed; `[`/`]` and Ctrl+Shift+O human-checked).
+  Ended now releases stream+decoder after 10 s like pause (probe: release
+  line, handles drop, 0 CPU, ~0 wakes/s) and Play/TogglePlay restarts the
+  file from 0 after release. Budgets: 1 10,418,176 B PASS, 3 5.48 MB PASS,
+  4 5.86 MB PASS, 5 UNSTABLE (0.44–0.98%, scheduler variance, NOT a Phase 4
+  contributor — see BENCH.md note), 7 paused + ended PASS, 9 0.53/s PASS
+  (self-instrumented engine counter — method in BENCH.md). Tests 31/31,
+  warnings ≤ baseline. Known gap (pre-existing, spec-silent): after
+  RestoreSession the engine may play at the saved speed while the UI speed
+  row still shows 1x — there is no speed event; fixed by a segment click.
+  Human checklist pending (spec §6/§7).
 - Phase 5 (Windows integration): not started.
 - Phase 6 (measurement and tuning): not started.
 
@@ -163,9 +177,12 @@ Phase 1 exit is fully closed:
 1. Human listen for clicks on pause/seek (cannot be automated), plus
    Phase 2 listening: pitch at each speed and clicks on speed change
    (§16 test 4).
-2. Budget 9 (wakeups/s) not yet measured — needs per-thread wakeup
-   tooling.
-3. Budgets 1–8 all PASS. Thread budget (8) was measured FAIL at 11 vs 4;
+2. Budget 9 measured for Phase 4: 0.53/s ≤ 2 PASS (0.529/s primary,
+   0.533/s cross-check), method + limitations in BENCH.md.
+3. Budgets 1–8 PASS except budget 5, recorded **UNSTABLE
+   (0.44–0.98%)** by human ruling — scheduler variance on this machine,
+   not a Phase 4 contributor (interleaved A/B, see the BENCH.md
+   budget-5 note). Thread budget (8) was measured FAIL at 11 vs 4;
    isolation recorded in `BENCH.md` (Slint floor 9, CLI floor 7) and the
    budget was revised to **12** in architecture.md §2.8.
 
