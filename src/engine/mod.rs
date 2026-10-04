@@ -131,6 +131,10 @@ pub struct Shared {
     pub flush_ack: AtomicBool,
     pub eof: AtomicBool,
     pub drained: AtomicBool,
+    // Budget 9 instrumentation (spec 5): engine-loop wake count + engine
+    // start instant. `w` on the CLI reads them; no OS-level tooling.
+    pub wakes: AtomicU64,
+    pub started: std::time::Instant,
 }
 
 impl Shared {
@@ -146,6 +150,8 @@ impl Shared {
             flush_ack: AtomicBool::new(false),
             eof: AtomicBool::new(false),
             drained: AtomicBool::new(false),
+            wakes: AtomicU64::new(0),
+            started: std::time::Instant::now(),
         })
     }
 
@@ -216,6 +222,7 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     let mut last_saved_pos: u64 = 0;
 
     loop {
+        shared.wakes.fetch_add(1, Ordering::Relaxed);
         let wait = match state {
             PlayState::Playing => {
                 let fill_ms = ctx
@@ -236,6 +243,7 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
             // Released (ctx taken): no timer — only a command wakes us,
             // which is what budget 7 ("no timers") asks for after 10 s.
             PlayState::Paused if ctx.is_some() => PAUSE_RELEASE,
+            PlayState::Ended if ctx.is_some() => PAUSE_RELEASE,
             PlayState::Idle | PlayState::Ended | PlayState::Error | PlayState::Paused => {
                 Duration::from_secs(3600)
             }
@@ -321,8 +329,12 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                         false,
                     );
                 } else {
-                    // Section 7.4.4: last file -> Ended.
+                    // Section 7.4.4: last file -> Ended. Start the same
+                    // 10 s release clock pause uses (spec 4.6, budget 7):
+                    // on_timeout releases the stream/decoder when it
+                    // elapses with no intervening command.
                     state = PlayState::Ended;
+                    paused_since = Some(std::time::Instant::now());
                     let _ = tx_events.send(Event::StateChanged(state));
                 }
             }
@@ -428,11 +440,10 @@ fn handle_command(
                     idx,
                 );
             } else if *state == PlayState::Ended {
-                if let Some(c) = ctx.as_mut() {
-                    flush_playing(c, 0, shared);
-                    *state = PlayState::Playing;
-                    let _ = tx_events.send(Event::StateChanged(*state));
-                }
+                restart_from_ended(
+                    state, ctx, paused_since, released_path, shared, tx_events,
+                    store, playlist, idx,
+                );
             }
         }
 
@@ -448,6 +459,13 @@ fn handle_command(
                 PlayState::Paused => {
                     resume(ctx, state, paused_since, released_path, shared, tx_events, store, playlist, idx)
                 }
+                // Spec 4.6: after Ended (released or not) Play restarts
+                // from 0 — without this arm the UI's Space/space button
+                // was a no-op once Ended (shipped gap).
+                PlayState::Ended => restart_from_ended(
+                    state, ctx, paused_since, released_path, shared, tx_events,
+                    store, playlist, idx,
+                ),
                 _ => {}
             }
         }
@@ -1061,6 +1079,38 @@ fn advance_to(
     }
 }
 
+/// Section 7: Play after Ended restarts the current file from position 0.
+/// ctx Some: flush in place (Phase 3 behavior). ctx None: released after
+/// the 10 s window — reopen the saved path (open_path auto-plays; its
+/// start position comes from the store, so flush to 0 right after), then
+/// flush to 0. No save: the trigger table has no play/restart trigger.
+fn restart_from_ended(
+    state: &mut PlayState,
+    ctx: &mut Option<PlaybackContext>,
+    paused_since: &mut Option<std::time::Instant>,
+    released_path: &mut Option<PathBuf>,
+    shared: &Arc<Shared>,
+    tx_events: &Sender<Event>,
+    store: &mut Store,
+    playlist: &mut Vec<PathBuf>,
+    idx: &mut usize,
+) {
+    *paused_since = None;
+    if let Some(c) = ctx.as_mut() {
+        flush_playing(c, 0, shared);
+        *state = PlayState::Playing;
+        let _ = tx_events.send(Event::StateChanged(*state));
+    } else if let Some(path) = released_path.take() {
+        open_path(
+            path, state, ctx, paused_since, shared, tx_events, 0, store,
+            released_path, playlist, idx,
+        );
+        if let Some(c) = ctx.as_mut() {
+            flush_playing(c, 0, shared);
+        }
+    }
+}
+
 fn pause(
     ctx: &mut Option<PlaybackContext>,
     state: &mut PlayState,
@@ -1124,14 +1174,16 @@ fn on_timeout(
     _shared: &Arc<Shared>,
     _tx_events: &Sender<Event>,
 ) {
-    if *state == PlayState::Paused && ctx.is_some() {
+    // Paused and Ended share one release mechanism (spec 4.6): after
+    // PAUSE_RELEASE with the context still open, keep only the path.
+    if matches!(*state, PlayState::Paused | PlayState::Ended) && ctx.is_some() {
         if let Some(since) = *paused_since {
             if since.elapsed() >= PAUSE_RELEASE {
-                // Section 8.2: release stream, ring, decoder and resampler;
-                // keep only the file path and the resume position
-                // (shared.base_ms).
                 *released_path = ctx.take().map(|c| c.path);
                 *paused_since = None;
+                if cfg!(debug_assertions) {
+                    eprintln!("[release] {state:?} stream+decoder released");
+                }
             }
         }
     }

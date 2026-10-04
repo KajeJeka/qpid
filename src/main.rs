@@ -6,6 +6,7 @@ mod winit_hook;
 
 use std::io::BufRead;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -79,7 +80,7 @@ fn run_cli(initial_path: Option<String>) {
         let _ = cmd_tx.send(Command::RestoreSession);
     }
 
-    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  q=quit");
+    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  w=wake-counter  q=quit");
 
     // Fresh process always starts at 1x, so the cycle position is known.
     let mut speed_idx: u32 = 1;
@@ -122,6 +123,17 @@ fn run_cli(initial_path: Option<String>) {
                 // Bare Enter: print current position as a quick sanity check
                 // of the position formula (section 7).
                 println!("position_ms = {}", shared.position_ms());
+            }
+            "w" => {
+                // Budget 9 (spec 5): engine wakes over uptime. The stdin
+                // read itself does not wake the engine, so a single
+                // reading over a 60 s window IS the background rate.
+                let wakes = shared.wakes.load(Ordering::Relaxed);
+                let up = shared.started.elapsed().as_secs_f64();
+                println!(
+                    "wakes={wakes} uptime_s={up:.1} wakes_per_s={:.2}",
+                    wakes as f64 / up.max(0.001)
+                );
             }
             other => {
                 eprintln!("unknown command: {other}");
