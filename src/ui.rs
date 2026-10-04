@@ -9,7 +9,9 @@
 //! window visible, stopped by pause/minimize), the seek slider drag guard,
 //! and the visibility sink from src/winit_hook.rs.
 
+use std::cell::Cell;
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -38,6 +40,11 @@ fn fraction_to_ms(fraction: f32, duration_ms: u64) -> u64 {
         return 0;
     }
     (fraction.clamp(0.0, 1.0) * duration_ms as f32).round() as u64
+}
+
+/// Spec 4.4: `[`/`]` step the segment index, clamped to the five speeds.
+fn clamp_step(current: i32, delta: i32) -> i32 {
+    (current + delta).clamp(0, 4)
 }
 
 thread_local! {
@@ -248,16 +255,34 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
             });
         });
     }
+    // Spec 4.4: one source of truth for the segment index; both the
+    // segment buttons and the [ ] step binding go through it.
+    let speed_index = Rc::new(Cell::new(1i32)); // window default is 1 (1x)
     {
         let cmd_tx = cmd_tx.clone();
         let weak = window.as_weak();
+        let speed_index = Rc::clone(&speed_index);
         window.on_set_speed(move |index| {
-            // Phase 2: the engine flushes to position with the new speed
-            // (section 7.1), so this is safe to send at any time. Indices
-            // match Speed::from_index (0=0.5x .. 4=2x).
+            let index = index.clamp(0, 4);
             let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
                 index as u32,
             )));
+            speed_index.set(index);
+            if let Some(window) = weak.upgrade() {
+                window.set_speed_index(index);
+            }
+        });
+    }
+    {
+        let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
+        let speed_index = Rc::clone(&speed_index);
+        window.on_step_speed(move |delta| {
+            let index = clamp_step(speed_index.get(), delta);
+            let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
+                index as u32,
+            )));
+            speed_index.set(index);
             if let Some(window) = weak.upgrade() {
                 window.set_speed_index(index);
             }
@@ -332,6 +357,30 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
 mod tests {
     use super::format_time;
     use super::fraction_to_ms;
+    use super::clamp_step;
+
+    #[test]
+    fn clamp_step_steps_within_range() {
+        assert_eq!(clamp_step(1, 1), 2);
+        assert_eq!(clamp_step(3, -1), 2);
+    }
+
+    #[test]
+    fn clamp_step_clamps_at_zero() {
+        assert_eq!(clamp_step(0, -1), 0);
+        assert_eq!(clamp_step(1, -4), 0);
+    }
+
+    #[test]
+    fn clamp_step_clamps_at_four() {
+        assert_eq!(clamp_step(4, 1), 4);
+        assert_eq!(clamp_step(3, 4), 4);
+    }
+
+    #[test]
+    fn clamp_step_identity_on_zero_delta() {
+        assert_eq!(clamp_step(2, 0), 2);
+    }
 
     #[test]
     fn fraction_zero_and_full() {

@@ -3,7 +3,7 @@ import { HorizontalBox, VerticalBox } from "std-widgets.slint";
 // -----------------------------------------------------------------------
 // Design tokens (section 10). Brand accent is green on near-black, per
 // project spec. Dark variant only for Phase 0/1 — light/dark theme
-// switching is added when the winit hook lands (Phase 4/5).
+// switching is deferred to Phase 5.
 // -----------------------------------------------------------------------
 global Tokens {
     out property <color> bg: #0b0d0a;
@@ -134,6 +134,8 @@ export component MainWindow inherits Window {
     min-width: 400px;
     min-height: 280px;
 
+    forward-focus: keys;
+
     // ---- state exposed to Rust (ui.rs sets these; static defaults for Phase 0) ----
     in property <string> folder-name: "";
     in property <string> track-title: "";
@@ -159,151 +161,185 @@ export component MainWindow inherits Window {
     callback set-speed(int);
     callback seek-to(float);
     callback seek-dragging(value-changed: bool);
+    callback step-speed(int);
 
-    VerticalBox {
-        padding: 20px;
-        spacing: 8px;
+    keys := FocusScope {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
 
-        // Top row: open buttons
-        HorizontalBox {
-            padding: 0px;
+        // Spec 4.4 key map. Letters compare against both cases because
+        // Shift changes event.text; arrow/space use the Key namespace.
+        // Chords are checked first so Ctrl+N etc. never reach the plain
+        // letter arms; everything else with a modifier is rejected.
+        key-pressed(event) => {
+            if (event.modifiers.control && (event.text == "o" || event.text == "O")) {
+                if (event.modifiers.shift) {
+                    root.open-folder();
+                } else {
+                    root.open-file();
+                }
+                return accept;
+            }
+            if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
+                return reject;
+            }
+            if (event.text == Key.Space) { root.toggle-play(); return accept; }
+            if (event.text == Key.LeftArrow) { root.seek-back(); return accept; }
+            if (event.text == Key.RightArrow) { root.seek-forward(); return accept; }
+            if (event.text == "n" || event.text == "N") { root.next-track(); return accept; }
+            if (event.text == "p" || event.text == "P") { root.prev-track(); return accept; }
+            if (event.text == "[") { root.step-speed(-1); return accept; }
+            if (event.text == "]") { root.step-speed(1); return accept; }
+            return reject;
+        }
+
+        VerticalBox {
+            padding: 20px;
             spacing: 8px;
-            alignment: start;
 
-            Rectangle {
-                width: 90px;
-                height: Tokens.button-height;
-                border-radius: Tokens.radius;
-                background: Tokens.surface;
-                border-width: 1px;
-                border-color: Tokens.divider;
-                TouchArea { clicked => { root.open-file(); } }
-                Text {
-                    text: "Open file";
-                    color: Tokens.text-primary;
-                    font-size: 12px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+            // Top row: open buttons
+            HorizontalBox {
+                padding: 0px;
+                spacing: 8px;
+                alignment: start;
+
+                Rectangle {
+                    width: 90px;
+                    height: Tokens.button-height;
+                    border-radius: Tokens.radius;
+                    background: Tokens.surface;
+                    border-width: 1px;
+                    border-color: Tokens.divider;
+                    TouchArea { clicked => { root.open-file(); } }
+                    Text {
+                        text: "Open file";
+                        color: Tokens.text-primary;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    width: 100px;
+                    height: Tokens.button-height;
+                    border-radius: Tokens.radius;
+                    background: Tokens.surface;
+                    border-width: 1px;
+                    border-color: Tokens.divider;
+                    TouchArea { clicked => { root.open-folder(); } }
+                    Text {
+                        text: "Open folder";
+                        color: Tokens.text-primary;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
             }
 
-            Rectangle {
-                width: 100px;
-                height: Tokens.button-height;
-                border-radius: Tokens.radius;
-                background: Tokens.surface;
-                border-width: 1px;
-                border-color: Tokens.divider;
-                TouchArea { clicked => { root.open-folder(); } }
-                Text {
-                    text: "Open folder";
-                    color: Tokens.text-primary;
-                    font-size: 12px;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        // Folder name
-        Text {
-            text: root.folder-name == "" ? "" : root.folder-name;
-            color: Tokens.text-muted;
-            font-size: 12px;
-            overflow: elide;
-            horizontal-alignment: left;
-        }
-
-        // Empty state / track title row
-        if !root.has-track: Text {
-            text: "Drop a folder or file here, or press Open";
-            color: Tokens.text-muted;
-            font-size: 14px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-            height: 40px;
-        }
-
-        if root.has-track: HorizontalBox {
-            padding: 0px;
+            // Folder name
             Text {
-                text: root.track-title;
-                color: Tokens.text-primary;
-                font-size: 18px;
-                font-weight: 600;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-            Text {
-                text: root.track-index + " / " + root.track-count;
+                text: root.folder-name == "" ? "" : root.folder-name;
                 color: Tokens.text-muted;
                 font-size: 12px;
-                vertical-alignment: center;
+                overflow: elide;
+                horizontal-alignment: left;
             }
-        }
 
-        // Seek row
-        HorizontalBox {
-            padding: 0px;
-            spacing: 8px;
-            Text {
-                text: root.elapsed-text;
+            // Empty state / track title row
+            if !root.has-track: Text {
+                text: "Drop a folder or file here, or press Open";
                 color: Tokens.text-muted;
-                font-size: 11px;
+                font-size: 14px;
+                horizontal-alignment: center;
                 vertical-alignment: center;
+                height: 40px;
             }
-            SeekSlider {
-                horizontal-stretch: 1;
-                fraction: root.seek-fraction;
-                enabled: root.seek-enabled;
-                dragging(changed) => { root.seek-dragging(changed); }
-                commit(value) => { root.seek-to(value); }
+
+            if root.has-track: HorizontalBox {
+                padding: 0px;
+                Text {
+                    text: root.track-title;
+                    color: Tokens.text-primary;
+                    font-size: 18px;
+                    font-weight: 600;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: root.track-index + " / " + root.track-count;
+                    color: Tokens.text-muted;
+                    font-size: 12px;
+                    vertical-alignment: center;
+                }
             }
+
+            // Seek row
+            HorizontalBox {
+                padding: 0px;
+                spacing: 8px;
+                Text {
+                    text: root.elapsed-text;
+                    color: Tokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+                SeekSlider {
+                    horizontal-stretch: 1;
+                    fraction: root.seek-fraction;
+                    enabled: root.seek-enabled;
+                    dragging(changed) => { root.seek-dragging(changed); }
+                    commit(value) => { root.seek-to(value); }
+                }
+                Text {
+                    text: root.duration-text;
+                    color: Tokens.text-muted;
+                    font-size: 11px;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Transport row
+            HorizontalBox {
+                padding: 0px;
+                spacing: 12px;
+                alignment: center;
+
+                TransportButton { label: "|<"; clicked => { root.prev-track(); } }
+                TransportButton { label: "-15"; clicked => { root.seek-back(); } }
+                TransportButton {
+                    label: root.is-playing ? "||" : ">";
+                    primary: true;
+                    diameter: 56px;
+                    clicked => { root.toggle-play(); }
+                }
+                TransportButton { label: "+15"; clicked => { root.seek-forward(); } }
+                TransportButton { label: ">|"; clicked => { root.next-track(); } }
+            }
+
+            // Speed row
+            HorizontalBox {
+                padding: 0px;
+                spacing: 4px;
+                alignment: center;
+
+                SpeedSegment { label: "0.5x"; active: root.speed-index == 0; clicked => { root.set-speed(0); } }
+                SpeedSegment { label: "1x";   active: root.speed-index == 1; clicked => { root.set-speed(1); } }
+                SpeedSegment { label: "1.25x";active: root.speed-index == 2; clicked => { root.set-speed(2); } }
+                SpeedSegment { label: "1.5x"; active: root.speed-index == 3; clicked => { root.set-speed(3); } }
+                SpeedSegment { label: "2x";   active: root.speed-index == 4; clicked => { root.set-speed(4); } }
+            }
+
+            // Status line
             Text {
-                text: root.duration-text;
-                color: Tokens.text-muted;
+                text: root.status-text;
+                color: Tokens.accent;
                 font-size: 11px;
-                vertical-alignment: center;
+                horizontal-alignment: center;
             }
-        }
-
-        // Transport row
-        HorizontalBox {
-            padding: 0px;
-            spacing: 12px;
-            alignment: center;
-
-            TransportButton { label: "|<"; clicked => { root.prev-track(); } }
-            TransportButton { label: "-15"; clicked => { root.seek-back(); } }
-            TransportButton {
-                label: root.is-playing ? "||" : ">";
-                primary: true;
-                diameter: 56px;
-                clicked => { root.toggle-play(); }
-            }
-            TransportButton { label: "+15"; clicked => { root.seek-forward(); } }
-            TransportButton { label: ">|"; clicked => { root.next-track(); } }
-        }
-
-        // Speed row
-        HorizontalBox {
-            padding: 0px;
-            spacing: 4px;
-            alignment: center;
-
-            SpeedSegment { label: "0.5x"; active: root.speed-index == 0; clicked => { root.set-speed(0); } }
-            SpeedSegment { label: "1x";   active: root.speed-index == 1; clicked => { root.set-speed(1); } }
-            SpeedSegment { label: "1.25x";active: root.speed-index == 2; clicked => { root.set-speed(2); } }
-            SpeedSegment { label: "1.5x"; active: root.speed-index == 3; clicked => { root.set-speed(3); } }
-            SpeedSegment { label: "2x";   active: root.speed-index == 4; clicked => { root.set-speed(4); } }
-        }
-
-        // Status line
-        Text {
-            text: root.status-text;
-            color: Tokens.accent;
-            font-size: 11px;
-            horizontal-alignment: center;
         }
     }
 }
