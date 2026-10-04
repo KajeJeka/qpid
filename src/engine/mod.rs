@@ -230,7 +230,14 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                     .map(|c| c.output.fill_ms())
                     .unwrap_or(HIGH_WATER_MS);
                 let wait = if fill_ms <= LOW_WATER_MS {
-                    Duration::from_millis(0)
+                    // Architecture §6's clamp floor (100 ms .. 2000 ms) — a
+                    // 0 here spins: at EOF the decoder is exhausted, refill
+                    // raises nothing and fill stays <= LOW_WATER until the
+                    // callback empties the ring, so recv_timeout(0) would
+                    // return every iteration (measured: ~80k wakes/s drain-
+                    // poll spin per track transition). The next refill still
+                    // runs immediately after this wait.
+                    Duration::from_millis(100)
                 } else {
                     let until_low = fill_ms - LOW_WATER_MS;
                     Duration::from_millis(until_low.clamp(100, 2000))
