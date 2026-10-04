@@ -221,8 +221,32 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     let mut next_checkpoint = std::time::Instant::now() + CHECKPOINT_INTERVAL;
     let mut last_saved_pos: u64 = 0;
 
+    // Budget 9 primary (Ruling 2b): debug-only wake log. Read the env var
+    // once, before the loop; release builds have neither local. Snapshots
+    // ride the existing wakes (>= 5 s apart) — no new thread or timer.
+    #[cfg(debug_assertions)]
+    let wake_log: Option<PathBuf> = std::env::var_os("QPID_WAKE_LOG").map(PathBuf::from);
+    #[cfg(debug_assertions)]
+    let mut last_write: Option<std::time::Instant> = None;
+
     loop {
         shared.wakes.fetch_add(1, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        if let Some(path) = &wake_log {
+            if last_write.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(path)
+                {
+                    let n = shared.wakes.load(Ordering::Relaxed);
+                    let t = shared.started.elapsed().as_secs_f64();
+                    let _ = writeln!(f, "wakes={n} uptime_s={t:.1}");
+                    last_write = Some(std::time::Instant::now());
+                }
+            }
+        }
         let wait = match state {
             PlayState::Playing => {
                 let fill_ms = ctx
