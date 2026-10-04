@@ -18,7 +18,7 @@ re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
 | 4 | USS, minimized, 1x | ≤ 15 MB | 5.86 MB — Phase 4 fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
 | 5 | CPU, minimized, 1x | ≤ 0.5% | 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see budget-5 note below** | UNSTABLE (0.44–0.98%, see note) |
 | 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)** | **PASS** |
-| 7 | Paused > 10 s | 0.0% CPU | 0.00% avg over 60 s (Phase 4 `--cli` re-run, 2026-10-04, `bench_results/paused-over-10s.csv`; 30 s run also 0.00%); USS 1.84 MB; handles −17; **Phase 4 ended >10 s: 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s** (Task 5 probe) | **PASS** |
+| 7 | Paused > 10 s | 0.0% CPU | **Phase 4 ended >10 s (probe, 2026-10-03):** 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s; **Phase 4 paused, 60 s re-run (2026-10-04):** 0.00%, USS 1.75 MB, 9 threads (`bench_results/paused-over-10s.csv`; controller's 30 s run same day also 0.00%); history (Phase 2, 2026-09-24): 0.00% over 30 s, USS 1.84 MB, handles −17 | **PASS** |
 | 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released — **not re-run for Phase 3 or 4** (Phase 4 minimized runs also showed 11) | **PASS** |
 | 9 | Wakeups/s, background | ≤ 2/s | 0.529/s primary (debug UI binary minimized, 38 wakes / 71.8 s) + 0.533/s cross-check (release `--cli`, 32 wakes / 60 s) — engine counter method, see Phase 4 probes | **PASS** |
 
@@ -215,10 +215,14 @@ task reports.
 
 ## Phase 4 probes (UI wiring)
 
-All automated (except the items marked human), debug build for the
-`[vis]`/`[tick]` probes and release for the rest, scripts in
-`$env:TEMP\opencode\` (not committed). Probes taken 2026-10-03; budget
-re-measurements 2026-10-04. Detail in
+All automated (except the items marked human). Build per probe:
+**debug** for visibility (Task 1), timer-stop (Tasks 2/4), keyboard
+(Task 4), ended-release (Task 5) and the budget-9 primary (Task 6) —
+those probes assert cfg-gated output (`[vis]`/`[tick]`/`[release]`) that
+a release build does not print; **release** for the path-arg acceptance
+and the budget-9 cross-check (Task 6). Scripts in `$env:TEMP\opencode\`
+(not committed). Probes from Tasks 1–5 taken 2026-10-03; Task 6 probes
+and the budget re-measurements 2026-10-04. Detail in
 `.superpowers/sdd/2026-10-03-phase4-ui/` task reports.
 
 - **Visibility probe (Task 1):** minimize/restore ×2 produced 4 `[vis]`

@@ -148,13 +148,12 @@ possible during authoring.
   it is a deviation from the letter of section 6.10. Flagged for the Phase 6
   tuning pass rather than solved now, per the "measure, then fix" priority
   order in section 1.
-- **UI wiring is ahead of spec in one direction, behind in another.** Open
-  file/folder and toggle-play are wired now (Phase 4 scope) because they
-  cost nothing to stub in Phase 0 and make the skeleton runnable end to end.
-  The speed row is wired as of Phase 2 (the engine's SetSpeed is real). The
-  500ms timer, seek slider commit, and keyboard shortcuts are explicitly
-  NOT wired, since they depend on features that don't exist yet — wiring
-  them now would create UI that lies about what the engine can do.
+- **UI wiring: ahead of spec in Phase 0, complete as of Phase 4.** Open
+  file/folder and toggle-play were stubbed in Phase 0 (they cost nothing
+  to stub and make the skeleton runnable end to end), the speed row is
+  wired as of Phase 2 (the engine's SetSpeed is real), and the 500 ms
+  timer, seek slider commit and keyboard shortcuts were wired in Phase 4
+  (see the Phase 4 Status bullet).
 - **Stretcher is a hand-written WSOLA, not `signalsmith-stretch` (§4.6
   first choice).** The crate's build requires libclang (bindgen in its
   build.rs, unconditional), which is not installed. §4 note 4 explicitly
@@ -171,8 +170,8 @@ possible during authoring.
 
 ## Measurement status
 
-Numbers for the measured budgets are in `BENCH.md`. Remaining before
-Phase 1 exit is fully closed:
+Numbers for the measured budgets are in `BENCH.md`. Measurement items
+(phases 1–4, status):
 
 1. Human listen for clicks on pause/seek (cannot be automated), plus
    Phase 2 listening: pitch at each speed and clicks on speed change
