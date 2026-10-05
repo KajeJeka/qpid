@@ -65,9 +65,12 @@ pub fn lower_thread_priority() {
     // check elsewhere should still compile).
 }
 
-/// Section 12.5 rule 4: one instance per session. True = we are the first
-/// (caller proceeds); False = another instance owns the mutex (caller
-/// hands over its path and exits).
+/// Section 12.5 rule 4: one instance per machine (the `Global\` namespace
+/// matches the machine-global pipe `\\.\pipe\qpid-open`, so a second
+/// session hands its path to the running instance instead of dying on a
+/// pipe it cannot create). True = we are the first (caller proceeds);
+/// False = another instance owns the mutex (caller hands over its path
+/// and exits).
 pub fn claim_instance() -> bool {
     #[cfg(windows)]
     {
@@ -75,7 +78,7 @@ pub fn claim_instance() -> bool {
         use windows::Win32::System::Threading::CreateMutexW;
         use windows::core::PCWSTR;
         unsafe {
-            let name: Vec<u16> = "Local\\qpid-instance"
+            let name: Vec<u16> = "Global\\qpid-instance"
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();

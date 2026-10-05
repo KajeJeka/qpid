@@ -19,7 +19,7 @@ re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
 | 5 | CPU, minimized, 1x | ≤ 0.5% | 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see budget-5 note below** | UNSTABLE (0.44–0.98%, see note) |
 | 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)** | **PASS** |
 | 7 | Paused > 10 s | 0.0% CPU | **Phase 4 ended >10 s (probe, 2026-10-03):** 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s; **Phase 4 paused, 60 s re-run (2026-10-04):** 0.00%, USS 1.75 MB, 9 threads (`bench_results/paused-over-10s.csv`; controller's 30 s run same day also 0.00%); history (Phase 2, 2026-09-24): 0.00% over 30 s, USS 1.84 MB, handles −17 | **PASS** |
-| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | 10 idle / 11 playing / 9 paused-released — **not re-run for Phase 3 or 4** (Phase 4 minimized runs also showed 11) | **PASS** |
+| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | **Phase 5 Task 4 (2026-10-05): 11 idle / 12 playing** (`bench_results/p5-t4-threads/*.csv`, 60 s runs; +1 thread over the 10/11 history = `qpid-pipe`, the single-instance listener); history: 10 idle / 11 playing / 9 paused-released (Phase 4 minimized runs also showed 11), not re-run for Phase 3 or 4 | **AT CAP (12/12, zero headroom) — any future thread-adding change is a budget failure** |
 | 9 | Wakeups/s, background | ≤ 2/s | 0.529/s primary (debug UI binary minimized, 38 wakes / 71.8 s) + 0.533/s cross-check (release `--cli`, 32 wakes / 60 s) — engine counter method, see Phase 4 probes | **PASS** |
 
 Budgets 2/7/8 were not re-run for Phase 3: no design change since
