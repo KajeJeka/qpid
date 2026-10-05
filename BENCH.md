@@ -15,7 +15,7 @@ Phase 5 sections at the bottom of this file.
 
 | # | Budget | Target | Result | Verdict |
 |---|--------|--------|--------|---------|
-| 1 | Exe size | ≤ 10 MB | **10,418,176 B (9.94 MB)** — Phase 4 final build (after the rule-10 debug guard; Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
+| 1 | Exe size | ≤ 10 MB | **10,452,992 B (9.97 MB)** — Phase 5 final build (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B**); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
 | 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
 | 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official, 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
@@ -330,9 +330,9 @@ must not be claimed as passing until the user reports results.
 | Second launch with a file path opens it in the first instance | **PASS (automated)** — Task 4 Step 6: inst2 exit **51 ms** (≤ 1000 ms), `[store] save (open of another path)` in inst1 stderr, exactly one qpid from the probe path |
 | Visual: second launch raises/restores the first window | **PENDING-HUMAN** (Task 4 Step 8) — probe proves the code path ran; `SetForegroundWindow` can be refused by the OS foreground lock |
 | Physical media keys control playback | **PENDING-HUMAN** (Task 5 Step 5). Automated support: 3/3 `VK_MEDIA_*` held (1409), `WM_HOTKEY` 1/2/3 accepted, released on exit |
-| Exe ≤ 10,485,760 | **PASS** — **10,451,968 B** (Task 5 release build at `741ce43`), margin **33,792 B** (verified from `target\release\qpid.exe`, code unchanged since) |
+| Exe ≤ 10,485,760 | **PASS** — **10,452,992 B** (branch-review release build at this HEAD, 2026-10-05), margin **32,768 B** (supersedes Task 5's 10,451,968 B — the slint help text is compiled into the exe; row 1) |
 | Threads ≤ 12 | **AT CAP (12/12, zero headroom)** — Task 4 Step 7: 11 idle / 12 playing (row 8) |
 | Budget 4 ≤ 15 MB without trim | **PASS** — Task 1 Step 7: **4.97 MB** (300 s, `QPID_NO_TRIM=1`); trim-on 2.10 MB (info) (row 4) |
-| Tests 31/31, release warnings = 7 | **PASS** — `cargo test` **31/31** re-run at HEAD code for this table (also Task 5's run); release warnings **7** = baseline (Task 5 build, no code change since) |
+| Tests 31/31, release warnings = 7 | **PASS** — `cargo test` **31/31** re-run at HEAD (branch-review cycle); release warnings **7** = baseline (branch-review build at this HEAD, same dead-code set) |
 | Rule 10 audit | **1 pre-existing exception, no Phase 5 violation** — equivalent of `grep -n -B1 "eprintln!" src/*.rs src/**/*.rs`: 13 hits, 12 have `debug_assertions` on the previous line; the one exception is `src/main.rs:147` `eprintln!("unknown command: ...")` in the dev-only `--cli` stdin loop, from Phase 1 (`dca6282`, 2026-09-24), untouched by Phase 5 |
 | Gate 4 | **PASS** — `grep -rn "winit_030" src` → only `src/winit_hook.rs:8` |

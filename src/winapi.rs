@@ -78,7 +78,9 @@ pub fn lower_thread_priority() {
 pub fn claim_instance() -> bool {
     #[cfg(windows)]
     {
-        use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+        use windows::Win32::Foundation::{
+            GetLastError, SetLastError, ERROR_ALREADY_EXISTS, ERROR_SUCCESS,
+        };
         use windows::Win32::System::Threading::CreateMutexW;
         use windows::core::PCWSTR;
         unsafe {
@@ -86,14 +88,17 @@ pub fn claim_instance() -> bool {
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
-            let Ok(h) = CreateMutexW(None, false, PCWSTR(name.as_ptr())) else {
+            // Clear a stale last-error (e.g. an earlier ERROR_ALREADY_EXISTS)
+            // so GetLastError below reflects THIS CreateMutexW call only —
+            // otherwise instance #1 could misread itself as #2 and exit.
+            SetLastError(ERROR_SUCCESS);
+            let Ok(_h) = CreateMutexW(None, false, PCWSTR(name.as_ptr())) else {
                 return true; // cannot create a mutex -> run anyway, never block the user
             };
             let first = GetLastError() != ERROR_ALREADY_EXISTS;
-            // HANDLE is Copy (no Drop), so this is a pure "keep the value"
-            // marker: the mutex lives until the process exits either way.
-            #[allow(forgetting_copy_types)]
-            std::mem::forget(h); // keep the mutex handle alive for the process
+            // HANDLE is Copy with no Drop (windows 0.58): `_h` going out of
+            // scope closes nothing — the mutex handle is deliberately never
+            // closed and the mutex lives until the process exits.
             first
         }
     }

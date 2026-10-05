@@ -11,12 +11,13 @@ and in the CLI — with the source line behind each behavior.
 
 | Launch | Behavior |
 |---|---|
-| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:161-164`, `src/engine/mod.rs:771-830`). Nothing in history → empty window. |
-| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:159-160`, autoplay at `src/engine/mod.rs:738`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:143`). |
+| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:196-199`, `src/engine/mod.rs:771-830`). Nothing in history → empty window. |
+| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:194-195`, autoplay at `src/engine/mod.rs:738`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:143`). |
 | `qpid.exe --cli <file-or-folder>` | Headless mode: no window, everything driven from the keyboard stdin (see §6). Meant for testing/benchmarks (`src/main.rs:24-32`). |
 
 On every exit — close button, `q`, or stdin end — the current position is
-saved before the process dies (`src/main.rs:148-149`, `src/engine/mod.rs:433-441`).
+saved before the process dies (`src/main.rs:156-157` CLI, `src/main.rs:204-205`
+UI, `src/engine/mod.rs:433-441`).
 
 **One copy at a time:** *Opening a second copy hands the file to the
 running window* — q-pid holds a machine-wide lock (`Global\qpid-instance`,

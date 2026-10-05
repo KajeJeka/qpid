@@ -163,8 +163,8 @@ environment — see "Unverified" below before trusting anything here).
     `window.run()` unregisters all three and destroys the window
     (`main.rs:202`). Every failure path returns silently (the feature is
     optional); no new thread, no timer. Size: **+512 B** including the
-    `Win32_UI_Input_KeyboardAndMouse` feature (10,451,456 →
-    **10,451,968 B**, margin 33,792 B ≤ 10,485,760 PASS). Probe: window
+    `Win32_UI_Input_KeyboardAndMouse` feature (10,451,456 → 10,451,968 B
+    at Task 5's build, ≤ 10,485,760 PASS). Probe: window
     present, all
     three keys held (conflict probe → 1409, bracketed by baseline/post-exit
     successes), `WM_HOTKEY` ids accepted, released after exit.
@@ -173,11 +173,11 @@ environment — see "Unverified" below before trusting anything here).
     is no deterministic underrun generator (ring is 2.9 s, max engine
     sleep 2 s; only a stalled engine thread could starve it). Soak and
     normal playback observed `underruns=0`.
-  - Gates at HEAD (`741ce43`): `cargo test` 31/31, release warnings 7
-    (baseline), exe 10,451,968 B, threads 11 idle / 12 playing
-    (**AT CAP 12/12**), budgets 5–7 not re-run (Phase 5 adds no
-    steady-state CPU — one INFO `playing-2x-minimized` spot-check at
-    1.65%; see BENCH.md).
+  - Gates at HEAD (branch-review cycle, 2026-10-05): `cargo test` 31/31,
+    release warnings 7 (baseline), exe **10,452,992 B** (margin **32,768 B**
+    ≤ 10,485,760), threads 11 idle / 12 playing (**AT CAP 12/12**), budgets
+    5–7 not re-run (Phase 5 adds no steady-state CPU — one INFO
+    `playing-2x-minimized` spot-check at 1.65%; see BENCH.md).
 - Phase 6 (measurement and tuning): not started.
 
 ## Unverified — do these first
