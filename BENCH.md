@@ -326,9 +326,9 @@ user on 2026-10-05.
 |---|---|
 | Unplug headphones while playing → pauses cleanly | **PASS (human, 2026-10-05)**. Automated support: device-error path probe — `StateChanged(Paused)` + `Message("Output device changed — press Play to resume")` 3/3 runs |
 | Sleep and wake works | **PASS (human, 2026-10-05)**. Supporting evidence only: soak sleep-resume gap `uptime_s` 3610 → 7210, wakes resumed, `underruns=0` |
-| Drag-drop a file onto the window opens it | **PASS (human, 2026-10-05)** — compile/type-level verification only (`WindowEvent::DroppedFile` sink) |
+| Drag-drop a file onto the window opens it | **PASS (human, 2026-10-05)** — file dropped on the window opened. Automated support: compile/type-level verification (`WindowEvent::DroppedFile` sink) |
 | Second launch with a file path opens it in the first instance | **PASS (automated)** — Task 4 Step 6: inst2 exit **51 ms** (≤ 1000 ms), `[store] save (open of another path)` in inst1 stderr, exactly one qpid from the probe path |
-| Visual: second launch raises/restores the first window | **PASS (human, 2026-10-05)** — probe proves the code path ran; `SetForegroundWindow` can be refused by the OS foreground lock |
+| Visual: second launch raises/restores the first window | **PASS (human, 2026-10-05)** — first window raised/restored. Note: `SetForegroundWindow` can be refused by the OS foreground lock |
 | Physical media keys control playback | **PASS (human, 2026-10-05)**. Automated support: 3/3 `VK_MEDIA_*` held (1409), `WM_HOTKEY` 1/2/3 accepted, released on exit |
 | Exe ≤ 10,485,760 | **PASS** — **10,452,992 B** (branch-review release build at this HEAD, 2026-10-05), margin **32,768 B** (supersedes Task 5's 10,451,968 B — the slint help text is compiled into the exe; row 1) |
 | Threads ≤ 12 | **AT CAP (12/12, zero headroom)** — Task 4 Step 7: 11 idle / 12 playing (row 8) |

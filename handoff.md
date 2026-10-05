@@ -44,7 +44,7 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 8. **All §15.6 exit gates PASS, including all 5 human gates** (user
    reported 2026-10-05). Final numbers below.
 
-## Final gate numbers (HEAD = `9e1ae52`)
+## Final gate numbers (final build = `40b0719`, docs commits after it don't rebuild)
 
 - `cargo test` **31/31**; release warnings **7** (baseline dead-code set).
 - Exe **10,452,992 B** ≤ 10,485,760 (margin **32,768 B** — tightest gate).
@@ -158,5 +158,6 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 # threads: 11 idle / 12 playing — ≤ 12, AT CAP; any new thread = budget failure
 ```
 
-State at handoff: `master` @ `9e1ae52`, clean tree, 31/31 tests, 7 release
-warnings, all §15.6 gates PASS (5 human gates 2026-10-05).
+State at handoff: `master`, clean tree, docs-only commits after `40b0719`
+(no rebuild needed), 31/31 tests, 7 release warnings, all §15.6 gates
+PASS (5 human gates 2026-10-05).
