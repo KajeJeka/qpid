@@ -1,6 +1,10 @@
 //! Windows process/power integration (architecture.md section 11.7 and 13).
 //! Everything here is best-effort: a failed call must never break the UI.
 
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Mutex;
+
 /// Section 11.7 rule 7: EcoQoS (execution-speed throttling) follows window
 /// visibility. ControlMask and StateMask both carry EXECUTION_SPEED when
 /// enabled; StateMask 0 restores normal scheduling.
@@ -224,5 +228,122 @@ pub fn raise_window() {
                 let _ = SetForegroundWindow(hwnd);
             }
         }
+    }
+}
+
+// Wndproc context: hotkey messages arrive on the UI thread's pump, so the
+// lock is uncontended in practice. Const-initializable (Rust >= 1.63).
+static MEDIA_TX: Mutex<Option<Sender<crate::engine::Command>>> = Mutex::new(None);
+// Message-only window handle for stop_media_keys (0 = never created).
+static MEDIA_HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Section 12.5 rule 5 / Phase 5 item 5 (optional): media transport keys
+/// via RegisterHotKey on a message-only window with our own wndproc
+/// (winit has no WM_HOTKEY path; spec's fallback when SMTC is skipped).
+/// Failure at any point = feature quietly absent.
+pub fn start_media_keys(tx: Sender<crate::engine::Command>) {
+    #[cfg(not(windows))]
+    let _ = tx;
+    #[cfg(windows)]
+    {
+        use windows::core::PCWSTR;
+        use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            RegisterHotKey, VK_MEDIA_NEXT_TRACK, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_PREV_TRACK,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, RegisterClassExW, WM_HOTKEY, HMENU,
+            WNDCLASSEXW, WS_POPUP, HWND_MESSAGE,
+        };
+
+        *MEDIA_TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+
+        unsafe extern "system" fn wndproc(
+            hwnd: HWND,
+            msg: u32,
+            wparam: WPARAM,
+            lparam: LPARAM,
+        ) -> LRESULT {
+            if msg == WM_HOTKEY {
+                let cmd = match wparam.0 {
+                    1 => Some(crate::engine::Command::TogglePlay),
+                    2 => Some(crate::engine::Command::Next),
+                    3 => Some(crate::engine::Command::Prev),
+                    _ => None,
+                };
+                if let (Some(cmd), Ok(guard)) = (cmd, MEDIA_TX.lock()) {
+                    if let Some(tx) = guard.as_ref() {
+                        let _ = tx.send(cmd);
+                    }
+                }
+                return LRESULT(0);
+            }
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+
+        let class: Vec<u16> = "qpid-media-keys".encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            let wc = WNDCLASSEXW {
+                cbSize: core::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(wndproc),
+                // Message-only window, never rendered: a null instance is
+                // fine (no resources to load). Contingency if
+                // RegisterClassExW fails with an instance-related error:
+                // add Win32_System_LibraryLoader + GetModuleHandleW and
+                // convert HMODULE.0 -> HINSTANCE.0.
+                hInstance: HINSTANCE::default(),
+                lpszClassName: PCWSTR(class.as_ptr()),
+                ..Default::default()
+            };
+            if RegisterClassExW(&wc) == 0 {
+                if cfg!(debug_assertions) {
+                    eprintln!("[media] RegisterClassExW failed");
+                }
+                return;
+            }
+            let hwnd = match CreateWindowExW(
+                Default::default(),
+                PCWSTR(class.as_ptr()),
+                PCWSTR(core::ptr::null()),
+                WS_POPUP,
+                0, 0, 0, 0,
+                HWND_MESSAGE,
+                HMENU::default(),
+                HINSTANCE::default(),
+                None,
+            ) {
+                Ok(h) => h,
+                Err(_) => return,
+            };
+            MEDIA_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+            // Ids 1..3 are what wndproc matches.
+            let _ = RegisterHotKey(hwnd, 1, Default::default(), VK_MEDIA_PLAY_PAUSE.0 as u32);
+            let _ = RegisterHotKey(hwnd, 2, Default::default(), VK_MEDIA_NEXT_TRACK.0 as u32);
+            let _ = RegisterHotKey(hwnd, 3, Default::default(), VK_MEDIA_PREV_TRACK.0 as u32);
+        }
+    }
+}
+
+/// Teardown paired with start_media_keys, run after the UI loop returns
+/// (same thread that created the window): release ids 1..3 and destroy the
+/// message-only window instead of leaning on process-exit cleanup.
+pub fn stop_media_keys() {
+    #[cfg(windows)]
+    {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;
+        use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+        let raw = MEDIA_HWND.swap(0, Ordering::SeqCst);
+        if raw == 0 {
+            return;
+        }
+        unsafe {
+            let hwnd = HWND(raw as *mut core::ffi::c_void);
+            for id in 1..=3 {
+                let _ = UnregisterHotKey(hwnd, id);
+            }
+            let _ = DestroyWindow(hwnd);
+        }
+        *MEDIA_TX.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }

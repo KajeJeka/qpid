@@ -166,6 +166,7 @@ fn run_ui(initial_path: Option<String>) {
     }
     winit_hook::install();
     let (cmd_tx, evt_rx, shared, engine) = spawn_engine();
+    winapi::start_media_keys(cmd_tx.clone());
 
     // The first instance's reader: decode UTF-16 payload -> OpenPath,
     // empty payload = raise only. Always raise the window (rule 4).
@@ -198,6 +199,7 @@ fn run_ui(initial_path: Option<String>) {
     }
 
     window.run().expect("event loop failed");
+    winapi::stop_media_keys();
 
     let _ = cmd_tx.send(Command::Shutdown);
     let _ = engine.join(); // section 9 rule 5: let the teardown save land
