@@ -87,7 +87,97 @@ environment — see "Unverified" below before trusting anything here).
   RestoreSession the engine may play at the saved speed while the UI speed
   row still shows 1x — there is no speed event; fixed by a segment click.
   Human checklist pending (spec §6/§7).
-- Phase 5 (Windows integration): not started.
+- Phase 5 (Windows integration): **build-verified, probes PASS; five human
+  gates pending** (unplug, sleep/wake, drag-drop, physical media keys,
+  visual window raise — see BENCH.md §15.6 table).
+  - *EcoQoS + trim* (`src/winapi.rs`: `set_ecoqos` via
+    `SetProcessInformation`/`ProcessPowerThrottling`, `trim_working_set`
+    via `SetProcessWorkingSetSize`) are driven from the existing
+    visibility sink (`src/ui.rs:320-322`): `set_ecoqos(!visible)` on every
+    transition, trim only when hidden and `QPID_NO_TRIM` is unset (the
+    measurement escape hatch for budget 4). **Why no timer (§18):** §18
+    forbids background threads/timers/periodic tasks not in the document,
+    and the visibility event already fires on exactly the transitions that
+    matter — so the wiring is inline on the event-loop thread, nothing
+    polls, and there is no wake when hidden beyond the engine's own.
+    `lower_thread_priority` moved into `winapi.rs` (same behavior).
+    Soak: **129.6 min minimized playing** (debug, trim armed),
+    `underruns=0` on all 581 wake-log lines, `[eco] EcoQoS on` after
+    `visible=false` (BENCH.md "Phase 5 probes"). Budget 4: **4.97 MB**
+    no-trim official / 2.10 MB trim-on info.
+  - *Device/sleep handling* (§12.3): cpal's `err_fn` stores
+    `Shared.device_error` (one relaxed store, no logging, no allocation,
+    `src/engine/output.rs`); the engine checks it once per existing wake —
+    one relaxed atomic load (`src/engine/mod.rs:338`) — and runs
+    `device_lost()` (`mod.rs:1176`): while Playing it calls `pause()`
+    (save + fold + `StateChanged(Paused)`), then drops the context into
+    `released_path` so resume rebuilds on the current default device, and
+    sends the status message "Output device changed — press Play to
+    resume". No new thread/timer/channel — the flag rides the wake that
+    already exists. Probe: `StateChanged(Paused)` + the Message in 3/3
+    runs, resume position within ±1.5 s of the pre-error position (one
+    run spent its blind `p` during the ≤2 s detection window and never
+    rebuilt — a probe race, not a product path; see task-2 report).
+  - *Pause-position fold* (`mod.rs:1219-1221`): `pause()` now folds the
+    live position into `base_ms` and zeroes `played_frames`. Rationale:
+    `resume()`'s released branch reads `base_ms` only, so without the fold
+    a pause → 10 s release → resume restarted at the **last seek point**
+    instead of the pause point (the store was already correct — only the
+    in-memory base was stale). Probe before/after: P1 38292 ms → resume
+    P2 39264 ms; pre-fix would be ≈32372 ms (the last seek), off by the
+    ~6 s the fold preserves. The fold sits immediately after `save_now`,
+    so the store and `base_ms` record the same value.
+  - *Drag-and-drop* (§15 Phase 5 item 2 / §10.3 window events):
+    `src/winit_hook.rs` gained a second
+    thread-local sink (`set_drop_sink`, :30) and dispatches
+    `WindowEvent::DroppedFile` inline on the event-loop thread (:99) to
+    the closure registered in `wire()` (`src/ui.rs:194`), which sends the
+    existing `Command::OpenPath`. No winit type appears in `ui.rs`, events
+    still propagate (nothing swallowed), no new thread/timer. Gate 4 holds:
+    `winit_030` only in `src/winit_hook.rs`. End-to-end drop is the
+    PENDING-HUMAN gate — compile-level verification only.
+  - *Single instance* (§12.5 rule 4): `claim_instance()`
+    (`src/winapi.rs:78`) creates `Global\qpid-instance` and tests
+    `ERROR_ALREADY_EXISTS`; it is the **first statement of `run_ui`**
+    (`src/main.rs:163`), i.e. before the winit hook and the engine — a
+    second instance creates no window, no engine thread and never writes a
+    state file (its path is only serialized into the payload). On loss it
+    writes UTF-16 (empty = raise-only) to the machine-global
+    `\\.\pipe\qpid-open` with 10 × 50 ms retries (`send_to_first_instance`,
+    :110) and returns. The first instance runs the **sanctioned 4th
+    thread** (`qpid-pipe`, `thread::Builder`) looping `ConnectNamedPipe` →
+    `OpenPath`/raise → `DisconnectNamedPipe` (`start_instance_listener`,
+    :141), then `raise_window()` (:197: `EnumWindows` on own PID,
+    `SW_RESTORE` + `SetForegroundWindow` — best-effort, the foreground lock
+    can refuse). `--cli` is exempt. Probe: **inst2 exit 51 ms**,
+    `[store] save (open of another path)` in inst1 stderr, exactly one
+    qpid left. `Global\` = one player per machine by design. The three
+    features the compiler demanded (`Win32_Security`,
+    `Win32_Storage_FileSystem`, `Win32_System_IO`) cost **0 B** after LTO.
+  - *Media keys* (§12.5 rule 5, optional): `RegisterHotKey` for
+    `VK_MEDIA_PLAY_PAUSE` / `NEXT_TRACK` / `PREV_TRACK` (ids 1–3) on a
+    message-only window `qpid-media-keys` created on the main thread
+    (`src/winapi.rs:244`), `WM_HOTKEY` → the existing
+    `TogglePlay`/`Next`/`Prev` commands; started after `spawn_engine`
+    (`main.rs:169`), `stop_media_keys()` (`winapi.rs:330`) after
+    `window.run()` unregisters all three and destroys the window
+    (`main.rs:202`). Every failure path returns silently (the feature is
+    optional); no new thread, no timer. Size: **+512 B** including the
+    `Win32_UI_Input_KeyboardAndMouse` feature (10,451,456 →
+    **10,451,968 B**, margin 33,792 B ≤ 10,485,760 PASS). Probe: window
+    present, all
+    three keys held (conflict probe → 1409, bracketed by baseline/post-exit
+    successes), `WM_HOTKEY` ids accepted, released after exit.
+  - **Documented limitation:** the `underruns > 0` path is asserted by
+    code review + counter wiring but **not exercised end-to-end** — there
+    is no deterministic underrun generator (ring is 2.9 s, max engine
+    sleep 2 s; only a stalled engine thread could starve it). Soak and
+    normal playback observed `underruns=0`.
+  - Gates at HEAD (`741ce43`): `cargo test` 31/31, release warnings 7
+    (baseline), exe 10,451,968 B, threads 11 idle / 12 playing
+    (**AT CAP 12/12**), budgets 5–7 not re-run (Phase 5 adds no
+    steady-state CPU — one INFO `playing-2x-minimized` spot-check at
+    1.65%; see BENCH.md).
 - Phase 6 (measurement and tuning): not started.
 
 ## Unverified — do these first

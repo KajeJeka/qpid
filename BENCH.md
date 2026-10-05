@@ -7,6 +7,9 @@ Phase 3 budget re-checks (exe size, budget 6 spot-check) measured
 Phase 4 measurements (UI wiring) taken 2026-10-03; budget
 re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
 "Phase 4" rows and the Phase 4 probes section.
+Phase 5 measurements (Windows integration) taken 2026-10-05 — rows
+4/6/8, the EcoQoS soak, and the §15.6 exit-criteria table in the
+Phase 5 sections at the bottom of this file.
 
 ## Budgets (architecture.md §2)
 
@@ -15,9 +18,9 @@ re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
 | 1 | Exe size | ≤ 10 MB | **10,418,176 B (9.94 MB)** — Phase 4 final build (after the rule-10 debug guard; Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
 | 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
-| 4 | USS, minimized, 1x | ≤ 15 MB | 5.86 MB — Phase 4 fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
+| 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official, 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
 | 5 | CPU, minimized, 1x | ≤ 0.5% | 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see budget-5 note below** | UNSTABLE (0.44–0.98%, see note) |
-| 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)** | **PASS** |
+| 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)**; **Phase 5 spot-check: 1.65% (1 run, 2026-10-05, INFO — see Phase 5 CPU note)** | **PASS** |
 | 7 | Paused > 10 s | 0.0% CPU | **Phase 4 ended >10 s (probe, 2026-10-03):** 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s; **Phase 4 paused, 60 s re-run (2026-10-04):** 0.00%, USS 1.75 MB, 9 threads (`bench_results/paused-over-10s.csv`; controller's 30 s run same day also 0.00%); history (Phase 2, 2026-09-24): 0.00% over 30 s, USS 1.84 MB, handles −17 | **PASS** |
 | 8 | Threads | ≤ 12 (revised from 4, see isolation below) | **Phase 5 Task 4 (2026-10-05): 11 idle / 12 playing** (`bench_results/p5-t4-threads/*.csv`, 60 s runs; +1 thread over the 10/11 history = `qpid-pipe`, the single-instance listener); history: 10 idle / 11 playing / 9 paused-released (Phase 4 minimized runs also showed 11), not re-run for Phase 3 or 4 | **AT CAP (12/12, zero headroom) — any future thread-adding change is a budget failure** |
 | 9 | Wakeups/s, background | ≤ 2/s | 0.529/s primary (debug UI binary minimized, 38 wakes / 71.8 s) + 0.533/s cross-check (release `--cli`, 32 wakes / 60 s) — engine counter method, see Phase 4 probes | **PASS** |
@@ -43,6 +46,20 @@ this file was already 0.11–0.89 incl. a prior 0.59% FAIL noted as
 variance. Controls on 2026-10-04: budget 6 2x = 1.82% PASS, budget 7
 paused = 0.00% PASS. Attribution: NOT a Phase 4 contributor (controller
 interleaved A/B above).
+
+**Phase 5 CPU% note (2026-10-05):** budgets 5–7 were **not re-run** as
+suites for Phase 5. Phase 5 adds no steady-state CPU — no new timers, no
+new threads on the hot path (the device-error flag check is one relaxed
+atomic load riding the existing engine wake), and EcoQoS / working-set
+trim only engage while the window is hidden. One 60 s
+`playing-2x-minimized` spot-check was run anyway (`--cli`, release,
+`bench_results/p5-t6-2x`): avg CPU **1.65%**, max USS 4.24 MB, max
+threads 9 — inside the Phase 2 1.57–1.88% band, PASS vs ≤ 2%. Recorded
+as **INFO only**; the budget-5 UNSTABLE ruling above is untouched. Caveats:
+`--cli` means no window to minimize (the harness's "could not find/
+minimize the window" warning is expected for this mode, as in the Phase 2
+runs) and the store's saved position advanced the file from track 3 to 4
+mid-run.
 
 ## Scenarios
 
@@ -267,3 +284,55 @@ and the budget re-measurements 2026-10-04. Detail in
   save 1/1 (input file `test.mp3` — `tone48k_60m.mp3` sorts last, where
   Next is a designed no-op). `[`/`]` speed step and Ctrl+Shift+O: human
   checklist.
+
+## Phase 5 probes (Windows integration)
+
+Automated unless marked human. Detail in
+`.superpowers/sdd/2026-10-04-phase5-windows-integration/` task reports;
+scripts in `%TEMP%\opencode\` (not committed). Taken 2026-10-05.
+
+- **EcoQoS soak (Task 1 Step 8, read in Task 6 Step 1): PASS.** "EcoQoS
+  soak: 30 min minimized playing, debug build, trim armed,
+  underruns=0" — the soak ran **129.6 min** (gate ≥ 30 min), `wake.log`
+  has 581 lines with **`underruns=0` on every line** and a uniform line
+  format (single writer); `stderr.txt` contains `[eco] EcoQoS on` **after**
+  `[vis] ... visible=false` (both asserts true).
+  Sleep-resume note: one wake gap jumped `uptime_s` 3610 → 7210 — the
+  machine slept during the soak; wakes resumed afterwards and underruns
+  stayed 0. Supporting evidence for the sleep/wake human gate only, not a
+  replacement for it.
+- **Budget 4:** row 4 — 4.97 MB no-trim (official) / 2.10 MB trim-on (info).
+- **Threads:** row 8 — 11 idle / 12 playing, **AT CAP (12/12)**.
+- **Single-instance probe (Task 4 Step 6):** inst2 exit **51 ms**,
+  `[store] save (open of another path)` in inst1's stderr, exactly one
+  qpid from the probe path remained.
+- **Media-key probe (Task 5):** message-only window `qpid-media-keys`
+  present; all three `VK_MEDIA_*` registrations held (probe's
+  `RegisterHotKey` → error 1409, bracketed by baseline/post-exit
+  successes); `WM_HOTKEY` ids 1/2/3 accepted and routed to the engine;
+  all three released after exit.
+- **Limitation:** the `underruns > 0` path is asserted by code review and
+  counter wiring but never exercised end-to-end — no deterministic
+  underrun generator exists (ring 2.9 s vs max engine sleep 2 s; only a
+  stalled engine thread could starve it). Soak and normal playback
+  observed `underruns=0` (see IMPLEMENTATION.md, Phase 5).
+
+## Phase 5 exit criteria (architecture.md §15.6)
+
+Automated rows are final; the five human rows are **PENDING-HUMAN** and
+must not be claimed as passing until the user reports results.
+
+| Gate | Evidence |
+|---|---|
+| Unplug headphones while playing → pauses cleanly | **PENDING-HUMAN** (Task 2 Step 8). Automated support: device-error path probe — `StateChanged(Paused)` + `Message("Output device changed — press Play to resume")` 3/3 runs |
+| Sleep and wake works | **PENDING-HUMAN** (Task 2 Step 8). Supporting evidence only: soak sleep-resume gap `uptime_s` 3610 → 7210, wakes resumed, `underruns=0` |
+| Drag-drop a file onto the window opens it | **PENDING-HUMAN** (Task 3 Step 4) — compile/type-level verification only (`WindowEvent::DroppedFile` sink) |
+| Second launch with a file path opens it in the first instance | **PASS (automated)** — Task 4 Step 6: inst2 exit **51 ms** (≤ 1000 ms), `[store] save (open of another path)` in inst1 stderr, exactly one qpid from the probe path |
+| Visual: second launch raises/restores the first window | **PENDING-HUMAN** (Task 4 Step 8) — probe proves the code path ran; `SetForegroundWindow` can be refused by the OS foreground lock |
+| Physical media keys control playback | **PENDING-HUMAN** (Task 5 Step 5). Automated support: 3/3 `VK_MEDIA_*` held (1409), `WM_HOTKEY` 1/2/3 accepted, released on exit |
+| Exe ≤ 10,485,760 | **PASS** — **10,451,968 B** (Task 5 release build at `741ce43`), margin **33,792 B** (verified from `target\release\qpid.exe`, code unchanged since) |
+| Threads ≤ 12 | **AT CAP (12/12, zero headroom)** — Task 4 Step 7: 11 idle / 12 playing (row 8) |
+| Budget 4 ≤ 15 MB without trim | **PASS** — Task 1 Step 7: **4.97 MB** (300 s, `QPID_NO_TRIM=1`); trim-on 2.10 MB (info) (row 4) |
+| Tests 31/31, release warnings = 7 | **PASS** — `cargo test` **31/31** re-run at HEAD code for this table (also Task 5's run); release warnings **7** = baseline (Task 5 build, no code change since) |
+| Rule 10 audit | **1 pre-existing exception, no Phase 5 violation** — equivalent of `grep -n -B1 "eprintln!" src/*.rs src/**/*.rs`: 13 hits, 12 have `debug_assertions` on the previous line; the one exception is `src/main.rs:147` `eprintln!("unknown command: ...")` in the dev-only `--cli` stdin loop, from Phase 1 (`dca6282`, 2026-09-24), untouched by Phase 5 |
+| Gate 4 | **PASS** — `grep -rn "winit_030" src` → only `src/winit_hook.rs:8` |

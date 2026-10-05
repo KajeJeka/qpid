@@ -18,6 +18,12 @@ and in the CLI — with the source line behind each behavior.
 On every exit — close button, `q`, or stdin end — the current position is
 saved before the process dies (`src/main.rs:148-149`, `src/engine/mod.rs:433-441`).
 
+**One copy at a time:** *Opening a second copy hands the file to the
+running window* — q-pid holds a machine-wide lock (`Global\qpid-instance`,
+`src/winapi.rs:78`), so the second copy never opens its own window: it
+sends the path over a named pipe (or just asks the first copy to come to
+the front) and exits in a few milliseconds (`src/main.rs:163-166`).
+
 ---
 
 ## 2. The window, top to bottom
@@ -46,9 +52,11 @@ long (`ui/main.slint:244-250`).
 ### Track area
 
 - Nothing loaded yet: **"Drop a folder or file here, or press Open"**
-  (`ui/main.slint:253-260`). ⚠️ Drag-and-drop is **not wired yet** (planned
-  for a later phase, `docs/superpowers/specs/2026-10-03-phase4-ui-design.md:47-48`)
-  — the text invites a drop that does nothing today. Use the Open buttons.
+  (`ui/main.slint:283`). **Drop a file or folder anywhere on the window to
+  open it** — drag-and-drop runs through the winit hook
+  (`src/winit_hook.rs:99`, sink registered at `src/ui.rs:194`). A drop
+  while another file plays behaves like Open file: the current file's
+  position is saved first, then the dropped one plays.
 - Track loaded: **title** (filename without extension — no tags or cover
   art, `src/engine/mod.rs:1001`) plus **`N / M`** position in the playlist
   (`ui/main.slint:262-278`).
@@ -126,6 +134,14 @@ Deliberate non-actions:
 - Caveat: `Shift+N` still triggers Next (the key text becomes `"N"` and the
   match is case-insensitive, `ui/main.slint:191`).
 
+### Media keys
+
+**Media keys: play/pause, next, previous** work while Q-pid runs — even
+when the window is minimized or unfocused (`RegisterHotKey` on a
+message-only window, `src/winapi.rs:244`). They trigger the same actions
+as the transport buttons; if your keyboard/headset has those keys, they
+work system-wide while q-pid is open.
+
 ---
 
 ## 4. The seek slider in detail
@@ -200,12 +216,10 @@ the app does (`src/main.rs:76-81`).
 
 ## 7. Known quirks / limitations
 
-1. **"Drop a folder or file here" doesn't work** — drag-and-drop is a later
-   phase; use the Open buttons or pass the path on the command line.
-2. **Speed row desync after restore** — shows 1x while audio may run at the
+1. **Speed row desync after restore** — shows 1x while audio may run at the
    saved speed; click a segment to resync.
-3. **Filename-only track titles** — no ID3 tags, no cover art.
-4. **Status line never clears** — last green message persists.
-5. **No seek into the final second** (clamp at duration − 1 s).
-6. **Light/dark theme switch** not available yet (dark only).
-7. `Shift+N` triggers Next (case-insensitive key match).
+2. **Filename-only track titles** — no ID3 tags, no cover art.
+3. **Status line never clears** — last green message persists.
+4. **No seek into the final second** (clamp at duration − 1 s).
+5. **Light/dark theme switch** not available yet (dark only).
+6. `Shift+N` triggers Next (case-insensitive key match).
