@@ -150,6 +150,10 @@ export component MainWindow inherits Window {
     in property <int> speed-index: 1; // 0=0.5x 1=1x 2=1.25x 3=1.5x 4=2x
     in property <bool> seek-enabled: false;
 
+    // Help overlay: pure-slint state (button, backdrop and Esc all write it
+    // directly) — no Rust wiring, no callback round-trip.
+    property <bool> show-help: false;
+
     // ---- commands to Rust (Phase 4 wires these; no-ops in Phase 0/1) ----
     callback open-file();
     callback open-folder();
@@ -174,6 +178,14 @@ export component MainWindow inherits Window {
         // Chords are checked first so Ctrl+N etc. never reach the plain
         // letter arms; everything else with a modifier is rejected.
         key-pressed(event) => {
+            // Help overlay is modal: only Esc passes through (closes it).
+            if (root.show-help) {
+                if (event.text == Key.Escape) {
+                    root.show-help = false;
+                    return accept;
+                }
+                return reject;
+            }
             if (event.modifiers.control && (event.text == "o" || event.text == "O")) {
                 if (event.modifiers.shift) {
                     root.open-folder();
@@ -232,6 +244,23 @@ export component MainWindow inherits Window {
                     TouchArea { clicked => { root.open-folder(); } }
                     Text {
                         text: "Open folder";
+                        color: Tokens.text-primary;
+                        font-size: 12px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+
+                Rectangle {
+                    width: 60px;
+                    height: Tokens.button-height;
+                    border-radius: Tokens.radius;
+                    background: Tokens.surface;
+                    border-width: 1px;
+                    border-color: Tokens.divider;
+                    TouchArea { clicked => { root.show-help = !root.show-help; } }
+                    Text {
+                        text: "Help";
                         color: Tokens.text-primary;
                         font-size: 12px;
                         horizontal-alignment: center;
@@ -339,6 +368,60 @@ export component MainWindow inherits Window {
                 color: Tokens.accent;
                 font-size: 11px;
                 horizontal-alignment: center;
+            }
+        }
+
+        // Help overlay: declared after the layout so it paints on top.
+        // Backdrop click, panel click and Esc all close it; while open the
+        // key handler rejects everything else (modal).
+        if root.show-help: Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height;
+            background: #00000099; // 60% dim over the window
+
+            TouchArea { clicked => { root.show-help = false; } }
+
+            Rectangle {
+                x: 30px;
+                y: 30px;
+                width: parent.width - 60px;
+                height: parent.height - 60px;
+                background: Tokens.surface;
+                border-width: 1px;
+                border-color: Tokens.divider;
+                border-radius: Tokens.radius;
+
+                VerticalBox {
+                    padding: 16px;
+                    spacing: 6px;
+
+                    Text {
+                        text: "Help - keyboard & buttons";
+                        color: Tokens.accent;
+                        font-size: 14px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: "Space: play / pause\nLeft / Right: seek -15 s / +15 s\nN: next track\nP: previous track (restarts if >5 s in)\n[ / ]: speed down / up\nCtrl+O: open file\nCtrl+Shift+O: open folder\nEsc: close this help\n\nButtons: |< prev   -15 back   > play/pause   +15 fwd   >| next\nSlider: drag or click to seek (dimmed until duration is known)\nSpeed row: click a pill to set 0.5x - 2x\n\nClick anywhere to close";
+                        color: Tokens.text-primary;
+                        font-size: 11px;
+                        horizontal-alignment: left;
+                        vertical-alignment: top;
+                        wrap: word-wrap;
+                        vertical-stretch: 1;
+                    }
+
+                    Text {
+                        text: "Q-pid";
+                        color: Tokens.text-muted;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                    }
+                }
             }
         }
     }
