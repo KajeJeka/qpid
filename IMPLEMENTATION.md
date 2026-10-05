@@ -134,8 +134,8 @@ environment — see "Unverified" below before trusting anything here).
     the closure registered in `wire()` (`src/ui.rs:194`), which sends the
     existing `Command::OpenPath`. No winit type appears in `ui.rs`, events
     still propagate (nothing swallowed), no new thread/timer. Gate 4 holds:
-    `winit_030` only in `src/winit_hook.rs`. End-to-end drop is the
-    PENDING-HUMAN gate — compile-level verification only.
+    `winit_030` only in `src/winit_hook.rs`. End-to-end drop was
+    human-confirmed 2026-10-05; prior verification was compile-level only.
   - *Single instance* (§12.5 rule 4): `claim_instance()`
     (`src/winapi.rs:78`) creates `Global\qpid-instance` and tests
     `ERROR_ALREADY_EXISTS`; it is the **first statement of `run_ui`**

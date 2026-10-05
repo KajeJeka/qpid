@@ -319,17 +319,17 @@ scripts in `%TEMP%\opencode\` (not committed). Taken 2026-10-05.
 
 ## Phase 5 exit criteria (architecture.md §15.6)
 
-Automated rows are final; the five human rows are **PENDING-HUMAN** and
-must not be claimed as passing until the user reports results.
+All rows are final; the five human rows were reported passing by the
+user on 2026-10-05.
 
 | Gate | Evidence |
 |---|---|
-| Unplug headphones while playing → pauses cleanly | **PENDING-HUMAN** (Task 2 Step 8). Automated support: device-error path probe — `StateChanged(Paused)` + `Message("Output device changed — press Play to resume")` 3/3 runs |
-| Sleep and wake works | **PENDING-HUMAN** (Task 2 Step 8). Supporting evidence only: soak sleep-resume gap `uptime_s` 3610 → 7210, wakes resumed, `underruns=0` |
-| Drag-drop a file onto the window opens it | **PENDING-HUMAN** (Task 3 Step 4) — compile/type-level verification only (`WindowEvent::DroppedFile` sink) |
+| Unplug headphones while playing → pauses cleanly | **PASS (human, 2026-10-05)**. Automated support: device-error path probe — `StateChanged(Paused)` + `Message("Output device changed — press Play to resume")` 3/3 runs |
+| Sleep and wake works | **PASS (human, 2026-10-05)**. Supporting evidence only: soak sleep-resume gap `uptime_s` 3610 → 7210, wakes resumed, `underruns=0` |
+| Drag-drop a file onto the window opens it | **PASS (human, 2026-10-05)** — compile/type-level verification only (`WindowEvent::DroppedFile` sink) |
 | Second launch with a file path opens it in the first instance | **PASS (automated)** — Task 4 Step 6: inst2 exit **51 ms** (≤ 1000 ms), `[store] save (open of another path)` in inst1 stderr, exactly one qpid from the probe path |
-| Visual: second launch raises/restores the first window | **PENDING-HUMAN** (Task 4 Step 8) — probe proves the code path ran; `SetForegroundWindow` can be refused by the OS foreground lock |
-| Physical media keys control playback | **PENDING-HUMAN** (Task 5 Step 5). Automated support: 3/3 `VK_MEDIA_*` held (1409), `WM_HOTKEY` 1/2/3 accepted, released on exit |
+| Visual: second launch raises/restores the first window | **PASS (human, 2026-10-05)** — probe proves the code path ran; `SetForegroundWindow` can be refused by the OS foreground lock |
+| Physical media keys control playback | **PASS (human, 2026-10-05)**. Automated support: 3/3 `VK_MEDIA_*` held (1409), `WM_HOTKEY` 1/2/3 accepted, released on exit |
 | Exe ≤ 10,485,760 | **PASS** — **10,452,992 B** (branch-review release build at this HEAD, 2026-10-05), margin **32,768 B** (supersedes Task 5's 10,451,968 B — the slint help text is compiled into the exe; row 1) |
 | Threads ≤ 12 | **AT CAP (12/12, zero headroom)** — Task 4 Step 7: 11 idle / 12 playing (row 8) |
 | Budget 4 ≤ 15 MB without trim | **PASS** — Task 1 Step 7: **4.97 MB** (300 s, `QPID_NO_TRIM=1`); trim-on 2.10 MB (info) (row 4) |
