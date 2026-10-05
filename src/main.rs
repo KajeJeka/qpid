@@ -3,6 +3,7 @@
 mod engine;
 mod ui;
 mod winit_hook;
+mod winapi;
 
 use std::io::BufRead;
 use std::path::PathBuf;
@@ -130,8 +131,9 @@ fn run_cli(initial_path: Option<String>) {
                 // reading over a 60 s window IS the background rate.
                 let wakes = shared.wakes.load(Ordering::Relaxed);
                 let up = shared.started.elapsed().as_secs_f64();
+                let underruns = shared.underruns.load(Ordering::Relaxed);
                 println!(
-                    "wakes={wakes} uptime_s={up:.1} wakes_per_s={:.2}",
+                    "wakes={wakes} uptime_s={up:.1} wakes_per_s={:.2} underruns={underruns}",
                     wakes as f64 / up.max(0.001)
                 );
             }

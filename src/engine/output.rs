@@ -236,6 +236,11 @@ fn audio_callback(
                 // callback. Section 6.9/8 — an underrun here means the
                 // engine's water-mark refill fell behind, not a bug in the
                 // callback itself.
+                if !shared.eof.load(Ordering::Relaxed)
+                    && shared.played_frames.load(Ordering::Relaxed) > 0
+                {
+                    shared.underruns.fetch_add(1, Ordering::Relaxed);
+                }
                 break;
             }
         };

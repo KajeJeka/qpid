@@ -134,6 +134,10 @@ pub struct Shared {
     // Budget 9 instrumentation (spec 5): engine-loop wake count + engine
     // start instant. `w` on the CLI reads them; no OS-level tooling.
     pub wakes: AtomicU64,
+    // Phase 5 soak (section 11.7 rule 7): callback silence-pads observed
+    // while audio should be flowing. Excluded: flush path, EOF drain,
+    // pre-first-frame startup (guarded in the callback).
+    pub underruns: AtomicU64,
     pub started: std::time::Instant,
 }
 
@@ -151,6 +155,7 @@ impl Shared {
             eof: AtomicBool::new(false),
             drained: AtomicBool::new(false),
             wakes: AtomicU64::new(0),
+            underruns: AtomicU64::new(0),
             started: std::time::Instant::now(),
         })
     }
@@ -198,7 +203,7 @@ struct PlaybackContext {
 /// `tx_events` sends UI-facing events; `shared` is the atomics block the UI
 /// timer polls directly.
 pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>) {
-    lower_thread_priority();
+    crate::winapi::lower_thread_priority();
 
     // Loaded here (section 5.2: engine owns persistence). Every write goes
     // through save_now (section 9 rule 5), which is the only place that
@@ -242,7 +247,8 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                 {
                     let n = shared.wakes.load(Ordering::Relaxed);
                     let t = shared.started.elapsed().as_secs_f64();
-                    let _ = writeln!(f, "wakes={n} uptime_s={t:.1}");
+                    let u = shared.underruns.load(Ordering::Relaxed);
+                    let _ = writeln!(f, "wakes={n} uptime_s={t:.1} underruns={u}");
                     last_write = Some(std::time::Instant::now());
                 }
             }
@@ -1218,22 +1224,6 @@ fn on_timeout(
             }
         }
     }
-}
-
-#[cfg(windows)]
-fn lower_thread_priority() {
-    use windows::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
-    };
-    unsafe {
-        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-    }
-}
-
-#[cfg(not(windows))]
-fn lower_thread_priority() {
-    // No-op on non-Windows dev hosts (this project targets Windows 11, but
-    // `cargo check` on other platforms should still compile for iteration).
 }
 
 #[cfg(test)]

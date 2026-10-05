@@ -303,6 +303,15 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
         *slot = Some(TimerControl::new(window.as_weak(), Arc::clone(&shared)));
     });
     crate::winit_hook::set_sink(|visible| {
+        // Section 11.7 rule 7: EcoQoS follows visibility (minimize or
+        // occlusion). Trim rides the same transition (Phase 5 item 1,
+        // optional); QPID_NO_TRIM is the measurement escape hatch budget 4
+        // requires. Runs inline on the event-loop thread: both calls are
+        // cheap and §18 forbids timers not in the document.
+        crate::winapi::set_ecoqos(!visible);
+        if !visible && std::env::var_os("QPID_NO_TRIM").is_none() {
+            crate::winapi::trim_working_set();
+        }
         with_tc(|tc| {
             if let Some(t) = tc {
                 t.set_visible(visible);
