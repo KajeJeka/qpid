@@ -15,14 +15,14 @@ Phase 5 sections at the bottom of this file.
 
 | # | Budget | Target | Result | Verdict |
 |---|--------|--------|--------|---------|
-| 1 | Exe size | ≤ 10 MB | **10,452,992 B (9.97 MB)** — Phase 5 final build (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B**); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
+| 1 | Exe size | ≤ 10 MB | **10,452,992 B (9.97 MB)** — Phase 5 final build (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B**); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Phase 4 Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
 | 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
 | 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official, 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
 | 5 | CPU, minimized, 1x | ≤ 0.5% | 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see budget-5 note below** | UNSTABLE (0.44–0.98%, see note) |
 | 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)**; **Phase 5 spot-check: 1.65% (1 run, 2026-10-05, INFO — see Phase 5 CPU note)** | **PASS** |
 | 7 | Paused > 10 s | 0.0% CPU | **Phase 4 ended >10 s (probe, 2026-10-03):** 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s; **Phase 4 paused, 60 s re-run (2026-10-04):** 0.00%, USS 1.75 MB, 9 threads (`bench_results/paused-over-10s.csv`; controller's 30 s run same day also 0.00%); history (Phase 2, 2026-09-24): 0.00% over 30 s, USS 1.84 MB, handles −17 | **PASS** |
-| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | **Phase 5 Task 4 (2026-10-05): 11 idle / 12 playing** (`bench_results/p5-t4-threads/*.csv`, 60 s runs; +1 thread over the 10/11 history = `qpid-pipe`, the single-instance listener); history: 10 idle / 11 playing / 9 paused-released (Phase 4 minimized runs also showed 11), not re-run for Phase 3 or 4 | **AT CAP (12/12, zero headroom) — any future thread-adding change is a budget failure** |
+| 8 | Threads | ≤ 12 (revised from 4, see isolation below) | **Phase 5 Task 4 (2026-10-05): 11 idle / 12 playing** (`bench_results/p5-t4-threads/*.csv`, 60 s runs; +1 thread over the 10/11 history = `qpid-pipe`, the single-instance listener); history: 10 idle / 11 playing / 9 paused-released; no dedicated thread re-run for Phase 3 or 4 (the Phase 4 minimized runs nonetheless peaked at 11) | **AT CAP (12/12, zero headroom) — any future thread-adding change is a budget failure** |
 | 9 | Wakeups/s, background | ≤ 2/s | 0.529/s primary (debug UI binary minimized, 38 wakes / 71.8 s) + 0.533/s cross-check (release `--cli`, 32 wakes / 60 s) — engine counter method, see Phase 4 probes | **PASS** |
 
 Budgets 2/7/8 were not re-run for Phase 3: no design change since
@@ -41,8 +41,8 @@ interleaved A/B, n=4 each, run order base/head/base/head/…:
 
 Δ of medians 0.03 pp; Δ of means 0.09 pp; base itself fails the ≤0.5%
 gate 3/4 today. Root cause: heterogeneous-CPU scheduler variance on a
-bursty workload (i5-12450HX 4P+4E); historical same-config spread in
-this file was already 0.11–0.89 incl. a prior 0.59% FAIL noted as
+bursty workload (i5-12450HX 4P+4E); historical same-config spread for
+this scenario was already 0.11–0.89 incl. a prior 0.59% FAIL noted as
 variance. Controls on 2026-10-04: budget 6 2x = 1.82% PASS, budget 7
 paused = 0.00% PASS. Attribution: NOT a Phase 4 contributor (controller
 interleaved A/B above).
@@ -62,6 +62,12 @@ runs) and the store's saved position advanced the file from track 3 to 4
 mid-run.
 
 ## Scenarios
+
+Sections below are the historical measurements as originally recorded
+(Phases 0/1–3); later phases supersede them through the budget rows
+above. `bench_results/*.csv` files are gitignored and overwritten by
+every run, so a `Raw:` pointer may now hold a later run's data — the
+rows above cite whatever the current file contains.
 
 ### idle-visible (30 s, window visible, no file)
 
@@ -116,13 +122,14 @@ observed number, **1.88%**, which leaves 0.12 pp (6%) of headroom.
 **Method / caveats:** `--cli` mode — the harness presses `s` three times
 on stdin (1 → 1.25 → 1.5 → 2) before sampling, and the process is
 headless (`windows_subsystem = "windows"`, no window), so "minimized" is
-moot. **This measurement excludes all UI thread cost** (no Slint window,
-no 500 ms position timer — the latter does not exist yet either). When
-Phase 4 wires the timer and the UI drives speed directly, this budget
-**must be re-verified in UI mode**: the thin 0.12 pp margin means even
-small added CPU can flip the verdict. UI mode cannot be automated for
-this scenario today (the harness has no way to click the speed row), so
-re-verification will need a UI-capable harness or a manual run. Speed
+moot. **This measurement excludes all UI thread cost** (no Slint window;
+the 500 ms position timer exists since Phase 4 but lives in the UI, which
+this mode never starts). Phase 4 wired the timer and the UI drives speed
+directly, but this budget **has not been re-verified in UI mode** — row 6
+holds only a single Phase 4 control run, and bench.py still cannot set
+speed in UI mode (the harness has no way to click the speed row), so
+re-verification needs a UI-capable harness or a manual run. The thin
+0.12 pp margin means even small added CPU can flip the verdict. Speed
 engagement was verified separately (CLI smoke below): position advanced
 at exactly 2.00x wall clock over 2 s, counted at the device callback, so
 the stretcher, resampler and ring all flowed at 2x.
@@ -155,9 +162,9 @@ Measured 2026-09-24 with a temporary `--slint-only` probe (window, no engine, no
 - App-owned threads we create: main, `qpid-engine`, `softbuffer_*` (Slint), `cpal_wasapi_out`, one UI event-drain (`ui.rs`). rfd dialog threads are transient (only while a file picker is open).
 - Remaining **EventPairLow** threads are Windows COM/RPC infrastructure spun up by winit and WASAPI — not application threads, not reducible without replacing the libraries.
 
-**Floor without our code:** Slint-only already sits at 9 (> 4). CLI (no Slint window) sits at 7 (> 4). Both library stacks independently exceed budget 8 before counting our three designed threads.
+**Floor without our code:** Slint-only already sits at 9 (> 4). CLI (no Slint window) sits at 7 (> 4). Both library stacks independently exceed the original budget of 4 before counting our three designed threads.
 
-**Verdict:** The budget of 4 assumed a minimal stack that does not match Slint+winit+cpal+Windows COM reality. Replacing the UI (§3.3) or cpal (Phase 6.3) would not reach 4 while still using either library's Windows backend. Budget 8 revised to **12** (approved); architecture.md §2.8 updated with this measurement as the reason. The three-thread design for app-owned threads (§5) stays the soft target.
+**Verdict:** The budget of 4 assumed a minimal stack that does not match Slint+winit+cpal+Windows COM reality. Replacing the UI (§3.3) or cpal (architecture §15 Phase 6, step 3 — the direct-WASAPI fallback) would not reach 4 while still using either library's Windows backend. Budget 8 revised to **12** (approved); architecture.md §2.8 updated with this measurement as the reason. The three-thread design for app-owned threads (§5) stays the soft target.
 
 ## Security baseline (Phase 6, 2026-10-05)
 
