@@ -16,6 +16,10 @@ Usage:
     python tools/bench.py --exe target/release/qpid.exe --scenario playing-1x-minimized \
         --file test_audio/test.mp3 --duration 60
 
+    Pin + median-of-N (budget 5 harness):
+    python tools/bench.py --exe target/release/qpid.exe --scenario playing-1x-minimized \
+        --file test_audio/test.mp3 --affinity 0,1,2,3,4,5,6,7 --repeat 5
+
 This drives the UI binary (`qpid.exe <file>` autoplays via `run_ui`, section
 15/main.rs). Pass --cli to instead launch `qpid.exe --cli <file>` for
 engine-only measurement without the UI thread — useful for isolating engine
@@ -35,6 +39,7 @@ import argparse
 import csv
 import ctypes
 import platform
+import statistics
 import subprocess
 import sys
 import time
@@ -118,6 +123,21 @@ def sample_process(proc: psutil.Process) -> dict:
 
 
 def run_scenario(args) -> None:
+    avg_cpus = []
+    for i in range(args.repeat):
+        suffix = f"_run{i + 1}" if args.repeat > 1 else ""
+        if args.repeat > 1:
+            print(f"\n=== run {i + 1}/{args.repeat} ===")
+        avg_cpus.append(run_once(args, suffix))
+
+    if args.repeat > 1:
+        print("\n--- repeat summary ---")
+        for i, a in enumerate(avg_cpus, 1):
+            print(f"run {i} avg CPU: {a:.2f}%")
+        print(f"median avg CPU: {statistics.median(avg_cpus):.2f}%  ({args.repeat} runs)")
+
+
+def run_once(args, suffix: str) -> float:
     exe = Path(args.exe)
     if not exe.exists():
         print(f"exe not found: {exe}", file=sys.stderr)
@@ -138,6 +158,14 @@ def run_scenario(args) -> None:
     except psutil.NoSuchProcess:
         print("process exited immediately; check the exe path/args", file=sys.stderr)
         sys.exit(1)
+
+    if args.affinity:
+        try:
+            cpus = [int(c) for c in args.affinity.split(",") if c.strip()]
+            proc.cpu_affinity(cpus)
+            print(f"pinned to CPUs {cpus}")
+        except (ValueError, psutil.Error) as e:
+            print(f"warning: could not set CPU affinity ({e}); continuing unpinned", file=sys.stderr)
 
     proc.cpu_percent(interval=None)  # prime the counter (first call is always 0)
 
@@ -208,7 +236,7 @@ def run_scenario(args) -> None:
     except subprocess.TimeoutExpired:
         proc_handle.kill()
 
-    out_path = Path(args.outdir) / f"{args.scenario}.csv"
+    out_path = Path(args.outdir) / f"{args.scenario}{suffix}.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["t", "cpu_pct", "uss_mb", "threads", "handles"])
@@ -217,6 +245,7 @@ def run_scenario(args) -> None:
     print(f"wrote {out_path}")
 
     summarize(args.scenario, rows)
+    return sum(r["cpu_pct"] for r in rows) / len(rows) if rows else 0.0
 
 
 def summarize(scenario: str, rows: list) -> None:
@@ -259,7 +288,13 @@ def main() -> None:
     parser.add_argument("--cli", action="store_true", help="launch qpid.exe --cli <file> instead of the UI binary")
     parser.add_argument("--duration", type=int, default=300, help="sampling window in seconds (default 300)")
     parser.add_argument("--outdir", default="bench_results", help="directory for CSV output")
+    parser.add_argument("--affinity", help='comma-separated CPUs to pin the target to, e.g. "0,1,2,3"')
+    parser.add_argument("--repeat", type=int, default=1, help="fresh runs; prints per-run avg CPU and the median (default 1)")
     args = parser.parse_args()
+
+    if args.repeat < 1:
+        print("--repeat must be >= 1", file=sys.stderr)
+        sys.exit(1)
 
     if args.scenario != "idle-visible" and not args.file:
         print(f"--file is required for scenario {args.scenario}", file=sys.stderr)
