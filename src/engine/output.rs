@@ -97,13 +97,13 @@ impl OutputStream {
         };
 
         let shared_cb = Arc::clone(&shared);
+        let shared_ef = Arc::clone(&shared);
 
-        let err_fn = |_err: cpal::StreamError| {
-            // Section 12.3: device error handling is the engine thread's
-            // job. The callback itself must not log or allocate; cpal calls
-            // this on a separate internal path, not the audio thread, so a
-            // no-op here plus the engine polling `Shared` state is enough
-            // for Phase 1. If a signal is needed, add one more AtomicBool.
+        let err_fn = move |_err: cpal::StreamError| {
+            // Section 12.3: device error (headphone unplug, sleep). cpal
+            // calls this off the audio thread; one atomic store, no logging
+            // or allocation — the engine polls it on its next wake.
+            shared_ef.device_error.store(true, Ordering::Release);
         };
 
         let stream = device

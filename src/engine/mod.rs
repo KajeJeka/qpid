@@ -138,6 +138,9 @@ pub struct Shared {
     // while audio should be flowing. Excluded: flush path, EOF drain,
     // pre-first-frame startup (guarded in the callback).
     pub underruns: AtomicU64,
+    // Section 12.3 rule 3: cpal error callback (device removed / sleep)
+    // sets this; the engine swaps it false on its next wake.
+    pub device_error: AtomicBool,
     pub started: std::time::Instant,
 }
 
@@ -156,6 +159,7 @@ impl Shared {
             drained: AtomicBool::new(false),
             wakes: AtomicU64::new(0),
             underruns: AtomicU64::new(0),
+            device_error: AtomicBool::new(false),
             started: std::time::Instant::now(),
         })
     }
@@ -325,6 +329,22 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
                 );
                 break;
             }
+        }
+
+        // Section 12.3 rule 3: device error flagged by cpal (unplug /
+        // sleep) — handle on this wake: save, Paused, drop the stream,
+        // Message. The next Play rebuilds on the current default device.
+        // No auto-resume.
+        if shared.device_error.swap(false, Ordering::Relaxed) {
+            device_lost(
+                &mut state,
+                &mut ctx,
+                &mut paused_since,
+                &mut released_path,
+                &shared,
+                &tx_events,
+                &mut store,
+            );
         }
 
         // Section 9 rule 5: checkpoint every 30 s while playing, and only
@@ -1148,6 +1168,35 @@ fn restart_from_ended(
     }
 }
 
+/// Section 12.3 rule 3: cpal reported a device error. While Playing this
+/// is a full pause (save + fold via pause()); otherwise just drop the
+/// stream and keep the state (Ended stays Ended, Idle stays Idle). The
+/// saved path goes to released_path so resume/restart rebuilds on the
+/// current default device.
+fn device_lost(
+    state: &mut PlayState,
+    ctx: &mut Option<PlaybackContext>,
+    paused_since: &mut Option<std::time::Instant>,
+    released_path: &mut Option<PathBuf>,
+    shared: &Arc<Shared>,
+    tx_events: &Sender<Event>,
+    store: &mut Store,
+) {
+    if *state == PlayState::Playing {
+        pause(ctx, state, paused_since, shared, tx_events, store);
+    }
+    if let Some(c) = ctx.take() {
+        *released_path = Some(c.path);
+        *paused_since = None; // release timer irrelevant without ctx
+        if cfg!(debug_assertions) {
+            eprintln!("[device] error -> stream released, state {state:?}");
+        }
+    }
+    let _ = tx_events.send(Event::Message(
+        "Output device changed — press Play to resume".into(),
+    ));
+}
+
 fn pause(
     ctx: &mut Option<PlaybackContext>,
     state: &mut PlayState,
@@ -1161,6 +1210,15 @@ fn pause(
     // is recorded but the top-level speed still lands. Placed before the
     // gain-down so the recorded position is pre-ramp.
     save_now(store, shared, ctx.as_ref().map(|c| c.path.as_path()), "pause");
+    // Section 8.2 position fix (Phase 5 ruling): fold the live position
+    // into base_ms NOW. resume()'s released branch reads base_ms only, so
+    // without this a pause -> 10 s release -> resume restarted at the last
+    // seek point instead of the pause point. The fold is position-
+    // preserving (base = position_ms, frames = 0) and save_now above
+    // already recorded the same value.
+    let pos = shared.position_ms();
+    shared.base_ms.store(pos, Ordering::Relaxed);
+    shared.played_frames.store(0, Ordering::Relaxed);
     if let Some(c) = ctx.as_mut() {
         shared.set_gain(0.0);
         std::thread::sleep(Duration::from_millis(20));

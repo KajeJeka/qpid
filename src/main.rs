@@ -81,7 +81,7 @@ fn run_cli(initial_path: Option<String>) {
         let _ = cmd_tx.send(Command::RestoreSession);
     }
 
-    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  w=wake-counter  q=quit");
+    println!("Controls: p=pause/resume  f=+15s  b=-15s  n=next  P=prev  s=speed  w=wake-counter  d=device-error  q=quit");
 
     // Fresh process always starts at 1x, so the cycle position is known.
     let mut speed_idx: u32 = 1;
@@ -136,6 +136,12 @@ fn run_cli(initial_path: Option<String>) {
                     "wakes={wakes} uptime_s={up:.1} wakes_per_s={:.2} underruns={underruns}",
                     wakes as f64 / up.max(0.001)
                 );
+            }
+            "d" => {
+                // Phase 5 probe: simulate cpal's device-error callback
+                // (run_cli is the dev-only CLI; rule 10's no-log rule does
+                // not apply to its existing stdout prints).
+                shared.device_error.store(true, Ordering::Relaxed);
             }
             other => {
                 eprintln!("unknown command: {other}");
