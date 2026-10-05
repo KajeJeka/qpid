@@ -14,11 +14,21 @@ thread_local! {
     static SINK: RefCell<Option<Box<dyn FnMut(bool)>>> = RefCell::new(None);
 }
 
+thread_local! {
+    static DROP_SINK: RefCell<Option<Box<dyn FnMut(std::path::PathBuf)>>> = RefCell::new(None);
+}
+
 /// Registers the visibility sink. Main/event-loop thread only (both this
 /// hook and `window.run()` live there; `slint::Timer` is not Send).
 /// Called once from `ui::wire` before `window.run()`.
 pub fn set_sink(sink: impl FnMut(bool) + 'static) {
     SINK.with(|s| *s.borrow_mut() = Some(Box::new(sink)));
+}
+
+/// Registers the dropped-file sink. Main/event-loop thread only (same
+/// constraints as set_sink). Called once from `ui::wire`.
+pub fn set_drop_sink(sink: impl FnMut(std::path::PathBuf) + 'static) {
+    DROP_SINK.with(|s| *s.borrow_mut() = Some(Box::new(sink)));
 }
 
 fn notify(visible: bool) {
@@ -85,6 +95,13 @@ impl CustomApplicationHandler for Hook {
             if cfg!(debug_assertions) {
                 eprintln!("[vis] occluded-event {o}");
             }
+        }
+        if let WindowEvent::DroppedFile(path) = event {
+            DROP_SINK.with(|s| {
+                if let Some(f) = s.borrow_mut().as_mut() {
+                    f(path.clone());
+                }
+            });
         }
         if let Some(window) = winit_window {
             self.evaluate(window);

@@ -186,6 +186,15 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
             });
         });
     }
+    // Phase 5 item 2: dropping a file or folder on the window goes through
+    // the same Command::OpenPath as the dialogs (gate 4 intact: the event
+    // type is only named inside winit_hook).
+    {
+        let cmd_tx = cmd_tx.clone();
+        crate::winit_hook::set_drop_sink(move |path| {
+            let _ = cmd_tx.send(Command::OpenPath(path));
+        });
+    }
 
     // Transport: only toggle-play is meaningful before Phase 2/3 add speed
     // and a real playlist. Seek/next/prev/speed callbacks are left connected
