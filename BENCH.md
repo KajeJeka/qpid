@@ -159,6 +159,63 @@ Measured 2026-09-24 with a temporary `--slint-only` probe (window, no engine, no
 
 **Verdict:** The budget of 4 assumed a minimal stack that does not match Slint+winit+cpal+Windows COM reality. Replacing the UI (§3.3) or cpal (Phase 6.3) would not reach 4 while still using either library's Windows backend. Budget 8 revised to **12** (approved); architecture.md §2.8 updated with this measurement as the reason. The three-thread design for app-owned threads (§5) stays the soft target.
 
+## Security baseline (Phase 6, 2026-10-05)
+
+Baseline fact for the 1.1 "no data collection" requirement. Four checks, run
+2026-10-05 on the final 1.0 build (`target\release\qpid.exe`, 10,452,992 B).
+
+**1. `cargo tree -e normal` — runtime dependency graph.**
+648 tree lines, **276 unique transitive crates**. Scanned the whole output for
+network-capable names (`reqwest|hyper|tokio|mio|socket2|ureq|isahc|curl|native-tls|
+openssl|http|tcp|udp|net2|trust-dns|attohttpc|minreq|websocket|ssh|ftp`):
+**zero hits.** The only name matched at all is **`webbrowser v1.2.4`** (and the
+false positive `scoped-tls-hkt` — Rust scoped-TLS, not transport security).
+
+**2. `Cargo.lock` name scan (610 package names, covers build/dev/all-target deps).**
+Exact-name scan for the same set: no `reqwest`, `hyper`, `tokio`, `mio`,
+`socket2`, `ureq`, `isahc`, `curl`, `native-tls`, `openssl`, `http`. Substring
+scan (`net|http|tls|sock|curl|web|dns|url|ssh|ftp|socket`) returns 11 names,
+each accounted for:
+
+| Cargo.lock name | In Windows runtime graph? | Why present |
+|---|---|---|
+| `webbrowser` 1.2.4 | **Yes** — `qpid → slint → i-slint-backend-winit` (unconditional dep); `libwebbrowser-*.rlib` present in `target/release/deps` | Slint's `Window::open_url` support |
+| `async-net` 2.0.0 | **No** — `cargo tree -e normal -i async-net` → *nothing to print* | `rfd → ashpd` (Linux xdg-portal only; rfd's Windows path uses COM file dialogs) |
+| `futures-io` | **No** — `cargo tree -e normal -i futures-io` → *nothing to print* | AsyncRead/AsyncWrite **traits only**, not sockets; not resolved into the graph |
+| `web-sys`, `web-time` | No | wasm32-only |
+| `url`, `urlencoding`, `data-url`, `form_urlencoded`, `image-webp` | Yes | URL/path/text parsing, no I/O |
+| `scoped-tls`, `scoped-tls-hkt` | Yes | thread-local scoping for compilers, not TLS |
+
+**3. Source grep — `src/` (10 files, whole tree).**
+`grep -rnE 'std::net|TcpStream|UdpSocket|reqwest|hyper|http|InternetOpen|WinHttp|
+WinInet|WSAStartup|Win32_Networking' src/` → **exit 1, zero matches.**
+`grep -rn 'open_url\|webbrowser' src/` → **exit 1, zero matches.**
+
+**4. `Cargo.toml` windows features.**
+Thirteen `Win32_*` features declared (`Foundation, Security, Storage_FileSystem,
+System_IO, System_Threading, System_Power, System_ProcessStatus, System_Memory,
+System_Pipes, UI_WindowsAndMessaging, UI_Input_KeyboardAndMouse, Graphics_Gdi,
+Media_Audio`); `grep 'Win32_Networking' Cargo.toml` → **exit 1, zero matches.**
+
+**5. Link-level cross-check (extra).**
+ASCII import scan of `target\release\qpid.exe`: `ws2_32`, `wsock32`, `wininet`,
+`winhttp`, `urlmon`, `dnsapi`, `iphlpapi`, `WSAStartup` → **all absent** from
+the binary image.
+
+**Caveats (reported honestly, not hidden):**
+
+- **`webbrowser v1.2.4` IS linked into the exe.** Why: transitive unconditional
+  dependency of Slint's winit backend. Runtime reachability: its only call site
+  in the whole graph is `i-slint-backend-winit/lib.rs:1081` inside
+  `Window::open_url`, which qpid never calls (check 3); even if called,
+  `webbrowser::open` shells out to the OS default browser — it does not open a
+  socket in-process and only acts on a caller-supplied URL. Verdict: linked,
+  **not reachable from qpid code**, zero network surface in 1.0.
+- **`async-net`** appears in `Cargo.lock` but is Linux-only (rfd/ashpd) and is
+  not in this build's dependency graph; it is never compiled for Windows.
+- Scope: this covers the app binary and its crate graph. It does not make
+  claims about Windows/Slint/cpal OS-level behaviour outside the process.
+
 ## Known failures / caveats
 
 1. **Thread budget:** revised from 4 to **12** in architecture.md §2.8, on the

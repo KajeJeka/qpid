@@ -1,9 +1,11 @@
 # Q-pid: Implementation status
 
 Spec: `architecture.md`. This file tracks what is actually built, where it
-deviates from the spec, and what still needs verification on a real Windows
-machine (this skeleton was authored without access to a Windows/MSVC build
-environment — see "Unverified" below before trusting anything here).
+deviates from the spec, and what still needs verification (this skeleton was
+authored in a Linux container with no Windows/MSVC build environment; every
+build-time API guess made then was settled by the Phases 1–5 builds — see
+"Unverified" below. What is left open is the Phase 6 measurements and the
+human listening checks).
 
 ## Status
 
@@ -61,14 +63,14 @@ environment — see "Unverified" below before trusting anything here).
 
   | # | §9 rule-5 trigger | Site(s) — real `grep 'save_now'` line numbers | reason |
   |---|---|---|---|
-  | 1 | Pause (incl. TogglePlay→pause) | `src/engine/mod.rs:1069` | `pause` |
-  | 2 | Next | `mod.rs:467` (Next arm) → `mod.rs:980` inside `advance_to` (`mod.rs:963`); EOF handoff entry `mod.rs:311` (ramp=false) also saves here | `next/prev` |
-  | 3 | Prev | `mod.rs:486` (position > 5 s restart) + `mod.rs:488` (index step) → `mod.rs:980` inside `advance_to` | `prev restart` / `next/prev` |
-  | 4 | Open of another path | `mod.rs:407` (pre-open, old file's position) | `open of another path` |
-  | 5 | Speed change | `mod.rs:516` — after `speed_milli` store (`mod.rs:509`), so position and new speed both land | `speed change` |
-  | 6 | Exit | engine: `mod.rs:392` (Shutdown) + `mod.rs:275` (channel dropped); main: `src/main.rs:135-136` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:154-155` (UI: Shutdown then `join()`) | `app exit` |
-  | 7 | Error stop (2 sites) | `mod.rs:706` (file-open failure) + `mod.rs:1042` (`advance_to` no-playable-file arm) | `error stop` |
-  | 8 | 30 s while playing | `mod.rs:292` (checkpoint in the wake path, only when position changed) | `30s checkpoint` |
+  | 1 | Pause (incl. TogglePlay→pause) | `src/engine/mod.rs:1212` | `pause` |
+  | 2 | Next | `mod.rs:540` (Next arm, no direct save) → `mod.rs:1062` inside `advance_to` (`mod.rs:1045`); EOF handoff entry `mod.rs:376` (ramp=false) also saves here | `next/prev` |
+  | 3 | Prev | `mod.rs:561` (position > 5 s restart) + `mod.rs:563` (index step) → `mod.rs:1062` inside `advance_to` | `prev restart` / `next/prev` |
+  | 4 | Open of another path | `mod.rs:476` (pre-open, old file's position) | `open of another path` |
+  | 5 | Speed change | `mod.rs:591` — after `speed_milli` store (`mod.rs:584`), so position and new speed both land | `speed change` |
+  | 6 | Exit | engine: `mod.rs:461` (Shutdown) + `mod.rs:324` (channel dropped); main: `src/main.rs:156-157` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:204-205` (UI: Shutdown then `join()`) | `app exit` |
+  | 7 | Error stop (2 sites) | `mod.rs:788` (file-open failure) + `mod.rs:1124` (`advance_to` no-playable-file arm) | `error stop` |
+  | 8 | 30 s while playing | `mod.rs:357` (checkpoint in the wake path, only when position changed) | `30s checkpoint` |
 - Phase 4 (UI): **build-verified**. The 500 ms position timer runs only
   while playing && window visible (winit `CustomApplicationHandler` hook in
   `src/winit_hook.rs` — the only unstable-API file; slint pinned `=1.18.1`),
@@ -87,9 +89,11 @@ environment — see "Unverified" below before trusting anything here).
   RestoreSession the engine may play at the saved speed while the UI speed
   row still shows 1x — there is no speed event; fixed by a segment click.
   Human checklist pending (spec §6/§7).
-- Phase 5 (Windows integration): **build-verified, probes PASS; five human
-  gates pending** (unplug, sleep/wake, drag-drop, physical media keys,
-  visual window raise — see BENCH.md §15.6 table).
+- Phase 5 (Windows integration): **build-verified, probes PASS; all five
+  human gates passed 2026-10-05** (unplug, sleep/wake, drag-drop, physical
+  media keys, visual window raise — reported passing by the user, recorded
+  in the BENCH.md §15.6 exit-criteria table; the sixth row there,
+  second-launch handoff, is automated PASS).
   - *EcoQoS + trim* (`src/winapi.rs`: `set_ecoqos` via
     `SetProcessInformation`/`ProcessPowerThrottling`, `trim_working_set`
     via `SetProcessWorkingSetSize`) are driven from the existing
@@ -144,10 +148,12 @@ environment — see "Unverified" below before trusting anything here).
     state file (its path is only serialized into the payload). On loss it
     writes UTF-16 (empty = raise-only) to the machine-global
     `\\.\pipe\qpid-open` with 10 × 50 ms retries (`send_to_first_instance`,
-    :110) and returns. The first instance runs the **sanctioned 4th
-    thread** (`qpid-pipe`, `thread::Builder`) looping `ConnectNamedPipe` →
+    `src/winapi.rs:115`) and returns. The first instance runs the
+    **sanctioned 4th thread** (`qpid-pipe`, `thread::Builder`) looping
+    `ConnectNamedPipe` →
     `OpenPath`/raise → `DisconnectNamedPipe` (`start_instance_listener`,
-    :141), then `raise_window()` (:197: `EnumWindows` on own PID,
+    `src/winapi.rs:146`), then `raise_window()` (`src/winapi.rs:202`:
+    `EnumWindows` on own PID,
     `SW_RESTORE` + `SetForegroundWindow` — best-effort, the foreground lock
     can refuse). `--cli` is exempt. Probe: **inst2 exit 51 ms**,
     `[store] save (open of another path)` in inst1 stderr, exactly one
@@ -157,9 +163,9 @@ environment — see "Unverified" below before trusting anything here).
   - *Media keys* (§12.5 rule 5, optional): `RegisterHotKey` for
     `VK_MEDIA_PLAY_PAUSE` / `NEXT_TRACK` / `PREV_TRACK` (ids 1–3) on a
     message-only window `qpid-media-keys` created on the main thread
-    (`src/winapi.rs:244`), `WM_HOTKEY` → the existing
+    (`src/winapi.rs:289`), `WM_HOTKEY` → the existing
     `TogglePlay`/`Next`/`Prev` commands; started after `spawn_engine`
-    (`main.rs:169`), `stop_media_keys()` (`winapi.rs:330`) after
+    (`main.rs:169`), `stop_media_keys()` (`winapi.rs:335`) after
     `window.run()` unregisters all three and destroys the window
     (`main.rs:202`). Every failure path returns silently (the feature is
     optional); no new thread, no timer. Size: **+512 B** including the
@@ -178,14 +184,14 @@ environment — see "Unverified" below before trusting anything here).
     ≤ 10,485,760), threads 11 idle / 12 playing (**AT CAP 12/12**), budgets
     5–7 not re-run (Phase 5 adds no steady-state CPU — one INFO
     `playing-2x-minimized` spot-check at 1.65%; see BENCH.md).
-- Phase 6 (measurement and tuning): not started.
+- Phase 6 (final measurement): **in progress — results at close.**
 
-## Unverified — do these first
+## Unverified — all resolved by the Phases 1–5 builds
 
 This project was scaffolded in a Linux container with no MSVC toolchain, no
-Windows, and no access to docs.rs/crates.io to confirm exact API shapes. The
-following are best-effort from written knowledge of each crate and MUST be
-checked against the actual compiler errors on first build:
+Windows, and no access to docs.rs/crates.io to confirm exact API shapes, so
+each item below was a best-effort guess that had to be checked against real
+compiler errors. Every one has since been settled by a real build:
 
 1. ~~**`signalsmith-stretch` crate name/availability.~~ RESOLVED:** the
    crate resolves (v0.1.3) but does not build here — its `build.rs` runs
@@ -193,34 +199,34 @@ checked against the actual compiler errors on first build:
    available), with no feature flag to skip it. Dependency removed from
    Cargo.toml; the §4 note 4 fallback (hand-written WSOLA) is implemented
    instead. Do not re-add it without libclang.
-2. **`rtrb` API surface** (`src/engine/output.rs`). The constructor name,
-   whether `RingBuffer::new(capacity)` returns `(Producer<T>, Consumer<T>)`,
-   and the method names `push`/`pop`/`slots`/`is_empty` are assumed from the
-   crate's known shape and were not checked live. Run `cargo doc -p rtrb` on
-   first build.
-3. **Slint API surface**: `slint_build::CompilerConfiguration`,
+2. **`rtrb` API surface** (`src/engine/output.rs`) — **RESOLVED (Phase 1):**
+   `RingBuffer::new` returning `(Producer, Consumer)` and the
+   `push`/`pop`/`slots`/`is_empty` names all matched the real crate;
+   `rtrb = "0.3"` builds at HEAD (`Cargo.toml:16`) and the ring is driven
+   live by every playback probe since Phase 1 (`cargo test` 31/31 at HEAD —
+   BENCH.md §15.6).
+3. **Slint API surface** (`slint_build::CompilerConfiguration`,
    `EmbedResourcesKind::EmbedForSoftwareRenderer`, `.with_style(...)`,
-   `slint::include_modules!()`, callback naming convention
-   (`on_open_file` etc. generated from `callback open-file()` in .slint),
-   and property setter naming (`set_track_title` from `in property
-   <string> track-title`). These follow Slint's documented conventions as
-   of my training data but Slint's API has changed across versions before —
-   verify against the actual `slint` crate version `cargo add` resolves.
-4. **`winresource` crate name.** This may be `embed-resource` or
-   `winres` depending on what's current — "winresource" was used because
-   it was named in architecture.md section 4, but confirm it's still the
-   maintained/correct crate on crates.io.
-5. **`windows` crate feature names** in Cargo.toml
-   (`Win32_System_Threading`, etc.) — verify against the installed
-   `windows` crate version; these move between major versions.
-6. **cpal `StreamConfig`/`SupportedStreamConfig` API**: `.config()`,
-   `.sample_format()`, `build_output_stream` signature (closure + error
-   callback + optional timeout) — verify against the cpal version resolved.
+   `slint::include_modules!()`, callback and property-setter naming) —
+   **RESOLVED (Phase 4):** all of it compiled and ran against the pinned
+   `slint = "=1.18.1"` (`Cargo.toml:12`); the Phase 4 UI probes (500 ms
+   timer stop conditions, seek slider, keyboard shortcuts) passed.
+4. **`winresource` crate name** — **RESOLVED:** it is the correct crate;
+   `winresource = "0.1"` (`Cargo.toml:41`) has resolved and linked through
+   every release build since Phase 0 (exe-size rows in BENCH.md).
+5. **`windows` crate feature names** — **RESOLVED:** the `windows = 0.58`
+   feature list (`Cargo.toml:23-37`) compiles at HEAD, and Phase 5's
+   additions (`Win32_Security`, `Win32_Storage_FileSystem`,
+   `Win32_System_IO`, `Win32_UI_Input_KeyboardAndMouse`) all bound without
+   a rename.
+6. **cpal `StreamConfig`/`SupportedStreamConfig` API** (`.config()`,
+   `.sample_format()`, `build_output_stream` closure signature) —
+   **RESOLVED (Phase 1):** `cpal = "0.15"` (`Cargo.toml:13`) builds against
+   `src/engine/output.rs`, and output is probe-verified end to end
+   (playback since Phase 1; device-error path 3/3 in Phase 5).
 
-None of these are exotic guesses; they're the documented shape of each
-crate as of when this was written. But "verify feature names on docs.rs"
-(architecture.md section 4) applies doubly here since no docs.rs lookup was
-possible during authoring.
+All items above are settled against the crate versions resolved at HEAD;
+no re-verification is needed before 1.0.
 
 ## Deviations from architecture.md
 
@@ -235,9 +241,9 @@ possible during authoring.
   avoid cloning the scratch buffer, but this still allocates a fresh `Vec`
   on the following call. This is on the engine thread, not the real-time
   audio callback, so it does not violate the hard rule in section 5.3, but
-  it is a deviation from the letter of section 6.10. Flagged for the Phase 6
-  tuning pass rather than solved now, per the "measure, then fix" priority
-  order in section 1.
+  it is a deviation from the letter of section 6.10. Phase 6 ruling
+  (2026-10-05): **intentionally not addressed** — no budget fails because
+  of it, so it stays a documented deviation (recorded, not fixed).
 - **UI wiring: ahead of spec in Phase 0, complete as of Phase 4.** Open
   file/folder and toggle-play were stubbed in Phase 0 (they cost nothing
   to stub and make the skeleton runnable end to end), the speed row is
@@ -256,7 +262,9 @@ possible during authoring.
   and the next refill retries (Phase 1 behavior) — "skip the packet" is
   not implemented. The `decode_burst` Err-branch comment in
   `src/engine/mod.rs` now says exactly that (was stale, claimed the
-  packet skip was landing in Phase 3).
+  packet skip was landing in Phase 3). Phase 6 ruling (2026-10-05):
+  **intentionally not addressed in Phase 6** — no budget fails because of
+  it; recorded as a permanent deviation, not fixed.
 
 ## Measurement status
 
