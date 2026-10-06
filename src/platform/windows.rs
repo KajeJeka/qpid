@@ -1,5 +1,4 @@
-//! Windows process/power integration (architecture.md section 11.7 and 13).
-//! Everything here is best-effort: a failed call must never break the UI.
+//! Windows platform surface (moved from winapi.rs, Phase 7). Everything here is best-effort: a failed call must never break the UI.
 
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
@@ -8,8 +7,7 @@ use std::sync::Mutex;
 /// Section 11.7 rule 7: EcoQoS (execution-speed throttling) follows window
 /// visibility. ControlMask and StateMask both carry EXECUTION_SPEED when
 /// enabled; StateMask 0 restores normal scheduling.
-pub fn set_ecoqos(enabled: bool) {
-    #[cfg(windows)]
+pub fn set_background_power_mode(enabled: bool) {
     unsafe {
         use windows::Win32::System::Threading::{
             GetCurrentProcess, ProcessPowerThrottling,
@@ -33,8 +31,6 @@ pub fn set_ecoqos(enabled: bool) {
             core::mem::size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
         );
     }
-    #[cfg(not(windows))]
-    let _ = enabled;
     if cfg!(debug_assertions) {
         eprintln!("[eco] EcoQoS {}", if enabled { "on" } else { "off" });
     }
@@ -44,7 +40,6 @@ pub fn set_ecoqos(enabled: bool) {
 /// QPID_NO_TRIM disables it so budget 4's official number is measured
 /// without the trim (section 2 budget 4).
 pub fn trim_working_set() {
-    #[cfg(windows)]
     unsafe {
         use windows::Win32::System::Threading::{
             GetCurrentProcess, SetProcessWorkingSetSize,
@@ -53,7 +48,6 @@ pub fn trim_working_set() {
     }
 }
 
-#[cfg(windows)]
 pub fn lower_thread_priority() {
     use windows::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
@@ -63,12 +57,6 @@ pub fn lower_thread_priority() {
     }
 }
 
-#[cfg(not(windows))]
-pub fn lower_thread_priority() {
-    // No-op on non-Windows dev hosts (project targets Windows 11; cargo
-    // check elsewhere should still compile).
-}
-
 /// Section 12.5 rule 4: one instance per machine (the `Global\` namespace
 /// matches the machine-global pipe `\\.\pipe\qpid-open`, so a second
 /// session hands its path to the running instance instead of dying on a
@@ -76,7 +64,6 @@ pub fn lower_thread_priority() {
 /// False = another instance owns the mutex (caller hands over its path
 /// and exits).
 pub fn claim_instance() -> bool {
-    #[cfg(windows)]
     {
         use windows::Win32::Foundation::{
             GetLastError, SetLastError, ERROR_ALREADY_EXISTS, ERROR_SUCCESS,
@@ -102,10 +89,6 @@ pub fn claim_instance() -> bool {
             first
         }
     }
-    #[cfg(not(windows))]
-    {
-        true
-    }
 }
 
 /// Second instance: hand our path argument to the first over the named
@@ -113,7 +96,6 @@ pub fn claim_instance() -> bool {
 /// Best-effort: if the pipe never appears we still exit (the user asked
 /// for one window, not two).
 pub fn send_to_first_instance(path: Option<&std::path::Path>) {
-    #[cfg(windows)]
     {
         use std::io::Write;
         let payload: Vec<u8> = match path {
@@ -135,8 +117,6 @@ pub fn send_to_first_instance(path: Option<&std::path::Path>) {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-    #[cfg(not(windows))]
-    let _ = path;
 }
 
 /// Section 12.5 rule 4 / section 5: the first instance's reader. One
@@ -144,7 +124,6 @@ pub fn send_to_first_instance(path: Option<&std::path::Path>) {
 /// blocked on ConnectNamedPipe — costs nothing while idle. The payload
 /// bytes (UTF-16 path, or empty = raise only) go to `on_path`.
 pub fn start_instance_listener(on_path: impl Fn(Vec<u8>) + Send + 'static) {
-    #[cfg(windows)]
     {
         use std::io::Read;
         use std::os::windows::io::FromRawHandle;
@@ -192,15 +171,12 @@ pub fn start_instance_listener(on_path: impl Fn(Vec<u8>) + Send + 'static) {
             });
         let _ = handle; // detached: it lives for the process
     }
-    #[cfg(not(windows))]
-    let _ = on_path;
 }
 
 /// Section 12.5 rule 4: bring this process's top-level window forward.
 /// Best-effort: SetForegroundWindow can be refused by the OS foreground
 /// lock; ShowWindow(SW_RESTORE) still un-minimizes.
 pub fn raise_window() {
-    #[cfg(windows)]
     {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows::Win32::System::Threading::GetCurrentProcessId;
@@ -247,9 +223,6 @@ static MEDIA_HWND: AtomicIsize = AtomicIsize::new(0);
 /// (winit has no WM_HOTKEY path; spec's fallback when SMTC is skipped).
 /// Failure at any point = feature quietly absent.
 pub fn start_media_keys(tx: Sender<crate::engine::Command>) {
-    #[cfg(not(windows))]
-    let _ = tx;
-    #[cfg(windows)]
     {
         use windows::core::PCWSTR;
         use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
@@ -333,7 +306,6 @@ pub fn start_media_keys(tx: Sender<crate::engine::Command>) {
 /// (same thread that created the window): release ids 1..3 and destroy the
 /// message-only window instead of leaning on process-exit cleanup.
 pub fn stop_media_keys() {
-    #[cfg(windows)]
     {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::Input::KeyboardAndMouse::UnregisterHotKey;

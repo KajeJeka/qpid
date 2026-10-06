@@ -207,7 +207,7 @@ struct PlaybackContext {
 /// `tx_events` sends UI-facing events; `shared` is the atomics block the UI
 /// timer polls directly.
 pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>) {
-    crate::winapi::lower_thread_priority();
+    crate::platform::lower_thread_priority();
 
     // Loaded here (section 5.2: engine owns persistence). Every write goes
     // through save_now (section 9 rule 5), which is the only place that

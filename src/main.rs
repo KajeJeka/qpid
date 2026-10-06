@@ -3,7 +3,7 @@
 mod engine;
 mod ui;
 mod winit_hook;
-mod winapi;
+mod platform;
 
 use std::io::BufRead;
 use std::path::PathBuf;
@@ -160,19 +160,19 @@ fn run_cli(initial_path: Option<String>) {
 fn run_ui(initial_path: Option<String>) {
     // Section 12.5 rule 4: a second launch hands its path to the first
     // instance and exits. The --cli path is exempt (dev tool, rule ruling).
-    if !winapi::claim_instance() {
-        winapi::send_to_first_instance(initial_path.as_deref().map(PathBuf::from).as_deref());
+    if !platform::claim_instance() {
+        platform::send_to_first_instance(initial_path.as_deref().map(PathBuf::from).as_deref());
         return;
     }
     winit_hook::install();
     let (cmd_tx, evt_rx, shared, engine) = spawn_engine();
-    winapi::start_media_keys(cmd_tx.clone());
+    platform::start_media_keys(cmd_tx.clone());
 
     // The first instance's reader: decode UTF-16 payload -> OpenPath,
     // empty payload = raise only. Always raise the window (rule 4).
     {
         let cmd_tx = cmd_tx.clone();
-        winapi::start_instance_listener(move |buf| {
+        platform::start_instance_listener(move |buf| {
             if buf.len() >= 2 && buf.len() % 2 == 0 {
                 let units: Vec<u16> = buf
                     .chunks_exact(2)
@@ -184,7 +184,7 @@ fn run_ui(initial_path: Option<String>) {
                     }
                 }
             }
-            winapi::raise_window();
+            platform::raise_window();
         });
     }
 
@@ -199,7 +199,7 @@ fn run_ui(initial_path: Option<String>) {
     }
 
     window.run().expect("event loop failed");
-    winapi::stop_media_keys();
+    platform::stop_media_keys();
 
     let _ = cmd_tx.send(Command::Shutdown);
     let _ = engine.join(); // section 9 rule 5: let the teardown save land

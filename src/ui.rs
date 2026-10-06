@@ -317,9 +317,9 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
         // optional); QPID_NO_TRIM is the measurement escape hatch budget 4
         // requires. Runs inline on the event-loop thread: both calls are
         // cheap and §18 forbids timers not in the document.
-        crate::winapi::set_ecoqos(!visible);
+        crate::platform::set_background_power_mode(!visible);
         if !visible && std::env::var_os("QPID_NO_TRIM").is_none() {
-            crate::winapi::trim_working_set();
+            crate::platform::trim_working_set();
         }
         with_tc(|tc| {
             if let Some(t) = tc {
