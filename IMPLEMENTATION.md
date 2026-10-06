@@ -96,10 +96,11 @@ is the human listening checks, delivered as the Phase 6 close checklist in
   media keys, visual window raise — reported passing by the user, recorded
   in the BENCH.md §15.6 exit-criteria table; the sixth row there,
   second-launch handoff, is automated PASS).
-  - *EcoQoS + trim* (now `src/platform/windows.rs`: `set_ecoqos` via
+  - *EcoQoS + trim* (now `src/platform/windows.rs`: `set_background_power_mode`
+    (ex-`set_ecoqos`) via
     `SetProcessInformation`/`ProcessPowerThrottling`, `trim_working_set`
     via `SetProcessWorkingSetSize`) are driven from the existing
-    visibility sink (`src/ui.rs:320-322`): `set_ecoqos(!visible)` on every
+    visibility sink (`src/ui.rs:320-322`): `set_background_power_mode(!visible)` on every
     transition, trim only when hidden and `QPID_NO_TRIM` is unset (the
     measurement escape hatch for budget 4). **Why no timer (§18):** §18
     forbids background threads/timers/periodic tasks not in the document,

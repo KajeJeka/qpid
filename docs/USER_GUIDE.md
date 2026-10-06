@@ -234,8 +234,9 @@ the app does (`src/main.rs:75-82`).
 
 ## 8. Linux
 
-Q-pid builds and runs on Linux; the packages ship with the first Linux
-release (the `v1.0.0` tag predates the port and carries no Linux assets).
+Q-pid builds and runs on Linux; packages ship on the [v1.1.0
+release](https://github.com/KajeJeka/qpid/releases/tag/v1.1.0), the first
+release to carry Linux assets (the `v1.0.0` tag predates the port).
 
 ### Install
 

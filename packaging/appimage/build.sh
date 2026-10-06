@@ -2,7 +2,7 @@
 # q-pid AppImage (linux-port.md section 11). Run from the repo root inside
 # an old-glibc container (ubuntu:22.04 = oldest LTS still receiving
 # security updates as of this plan; glibc 2.35 baseline). Needs rustc,
-# pkg-config, libasound2-dev. Produces qpid-*.AppImage in the repo root.
+# pkg-config, libasound2-dev, libfontconfig1-dev, file (appimagetool). Produces qpid-*.AppImage in the repo root.
 set -euo pipefail
 
 ARCH="$(uname -m)"    # x86_64 | aarch64

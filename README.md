@@ -6,15 +6,13 @@ It is built to strict resource limits: the Windows executable stays under 10 MB,
 
 ## Download
 
-Grab [`qpid-v1.0.0.exe`](https://github.com/KajeJeka/qpid/releases/download/v1.0.0/qpid-v1.0.0.exe) from the [releases page](https://github.com/KajeJeka/qpid/releases). It is a single portable executable: no installer, no dependencies. Put it anywhere and run it.
+Grab [`qpid-v1.1.0-windows-x86_64.exe`](https://github.com/KajeJeka/qpid/releases/download/v1.1.0/qpid-v1.1.0-windows-x86_64.exe) from the [releases page](https://github.com/KajeJeka/qpid/releases) (the `v1.0.0` tag predates the port and carries only the old portable exe). It is a single portable executable: no installer, no dependencies. Put it anywhere and run it.
 
-Linux packages — **links after the first Linux release** (the `v1.0.0` tag
-predates the port, so it carries no Linux assets; the AUR in particular
-must be first published against a tag that ships the packaging files):
+Linux packages ship on the [v1.1.0 release](https://github.com/KajeJeka/qpid/releases/tag/v1.1.0) (first Linux release):
 
-- **AppImage** — `qpid-<tag>-x86_64.AppImage` / `qpid-<tag>-aarch64.AppImage`: `chmod +x`, run.
-- **Flatpak** — `qpid-<tag>.flatpak`, a self-hosted bundle on the release page (not Flathub): `flatpak install --user qpid-<tag>.flatpak`.
-- **AUR** — the release's `aur` artifact holds a rendered `PKGBUILD` (real checksum) and its README; publish procedure in [packaging/aur/README.md](packaging/aur/README.md).
+- **AppImage** — [`qpid-v1.1.0-x86_64.AppImage`](https://github.com/KajeJeka/qpid/releases/download/v1.1.0/qpid-v1.1.0-x86_64.AppImage) / [`qpid-v1.1.0-aarch64.AppImage`](https://github.com/KajeJeka/qpid/releases/download/v1.1.0/qpid-v1.1.0-aarch64.AppImage): `chmod +x`, run.
+- **Flatpak** — [`qpid-v1.1.0.flatpak`](https://github.com/KajeJeka/qpid/releases/download/v1.1.0/qpid-v1.1.0.flatpak), a self-hosted bundle on the release page (not Flathub): `flatpak install --user qpid-v1.1.0.flatpak`.
+- **AUR** — the release's `PKGBUILD` + `README.md` assets hold a rendered `PKGBUILD` (real checksum) and its publish procedure ([packaging/aur/README.md](packaging/aur/README.md)).
 
 ## Building and running
 

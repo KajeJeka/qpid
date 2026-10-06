@@ -9,21 +9,27 @@ accurate). Earlier handoffs and SDD ledgers are in git history and
 `.superpowers/sdd/`.
 
 **Linux port is landed** through packaging + CI/release workflows and
-this docs sweep (Phases 7–12; commits `566a112` → `44048e1`, docs sweep
-uncommitted — R4, controller commits). The repo is on GitHub
-(`origin` = https://github.com/KajeJeka/qpid); `v1.0.0` is published
-https://github.com/KajeJeka/qpid/releases/tag/v1.0.0 with the portable
-exe `qpid-v1.0.0.exe` (rebuilt from the tag, 10,452,480 B) — that tag
-predates the port and carries **no** Linux assets. What remains: Phase
+this docs sweep (Phases 7–12; commits `566a112` → `0980942`, every task
+reviewed; `6543509`/`0980942` are the two CI dry-run fixes). The repo is
+on GitHub (`origin` = https://github.com/KajeJeka/qpid); **`v1.1.0` is
+published** — the first Linux release,
+https://github.com/KajeJeka/qpid/releases/tag/v1.1.0 — six assets:
+Windows exe 10,458,624 B (cap 10,485,760), AppImage x86_64 + aarch64,
+Flatpak bundle, rendered PKGBUILD + README. `v1.0.0` stays the
+Windows-only tag. Cosmetic known mismatch: the v1.1.0 exe was built
+before the crate bump, so its PE version resource says 1.0.0
+(`Cargo.toml` = 1.1.0 immediately after the tag). What remains: Phase
 10 (measure Linux budgets on a physical Linux box) and the friend's
 test checklist below.
 
 ## Linux port session (2026-10-06): what was done
 
-Plan: `docs/superpowers/plans/2026-10-06-linux-port.md` (11 tasks);
+Plan: `docs/linux-port.md` (11 tasks; working copy with per-task
+checkboxes also at `docs/superpowers/plans/2026-10-06-linux-port.md`,
+untracked);
 authoritative ledger `.superpowers/sdd/2026-10-06-linux-port/progress.md`
 (rulings R-L1–R-L6, CI run history — trust it over task-report prose).
-Commits `566a112` → `44048e1` on `master`, every task reviewed:
+Commits `566a112` → `0980942` on `master`, every task reviewed:
 
 1. **Phase 7 — platform abstraction** (`6382c1b`): `src/winapi.rs` →
    `src/platform/{windows,linux}.rs` behind `cfg` re-exports, so every
@@ -48,7 +54,7 @@ Commits `566a112` → `44048e1` on `master`, every task reviewed:
    appimage-x86_64, appimage-aarch64, flatpak, aur, publish on tags;
    `workflow_dispatch` = dry run, no publish).
 6. **Task 11 — this docs sweep** (README, USER_GUIDE, BENCH,
-   IMPLEMENTATION, architecture name fix; uncommitted per R4).
+   IMPLEMENTATION, architecture name fix; committed `2234607`).
 
 **CI is the Linux gate** — no Linux machine in this session, so the
 ubuntu job compiles and runs the whole test suite (38: 35 shared + 3
@@ -71,8 +77,9 @@ extracted from `assets/icon.ico` with Pillow (256 px); test-only: the
 
 **Standing rulings from this port:** state-key lowercasing is
 unconditional on Linux too (case-only name collisions possible, rare);
-**AUR first publish targets the NEXT tag** — `v1.0.0` ships no packaging
-assets, procedure in `packaging/aur/README.md`, artifact name `aur`;
+**AUR publish is manual** (first done against `v1.1.0`; every future
+publish targets a tag that ships the packaging files), procedure in
+`packaging/aur/README.md`, artifact name `aur`;
 Flatpak is a **self-hosted bundle on GitHub Releases**
 (app-id `io.github.KajeJeka.qpid`), **not Flathub**; **Linux sizes are
 reported, never budgeted** (BENCH.md "Linux budgets — NOT YET MEASURED",
@@ -355,7 +362,7 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 ```powershell
 cargo test                                   # expect 35 passed on Windows (38 on Linux: +3 platform::linux)
 cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
-(Get-Item target\release\qpid.exe).Length    # cap 10,485,760; now 10,452,992 (margin 32,768)
+(Get-Item target\release\qpid.exe).Length    # cap 10,485,760; v1.1.0 asset 10,458,624 (margin 27,136)
 # rule 10 (previous line must show debug_assertions; 13 hits, 12 guarded,
 # documented exception src/main.rs:147):
 & "C:\Program Files\Git\bin\bash.exe" -c 'grep -n -B1 "eprintln!" src/*.rs src/**/*.rs'
@@ -364,15 +371,17 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 # threads: 11 idle / 12 playing — ≤ 12, AT CAP; any new thread = budget failure
 ```
 
-State at handoff: `master` at `44048e1` + the Task 11 docs sweep
-(uncommitted — R4, controller commits), release `v1.0.0` published on
-GitHub with the exe asset. Windows gates: `cargo test` **35 passed**,
-release warnings **7**, release asset **10,452,480 B** (cap 10,485,760;
-gate build 10,452,992 B + version metadata), rule 10 = 13/12+1
-(`main.rs:147`), gate 4 isolated, all §15.6 gates PASS (5 human gates
-2026-10-05), all nine Phase 6 budgets recorded in BENCH.md (5 =
-permanent UNSTABLE ruling, 8 = AT CAP). Linux: compile/test gate green
-in CI (run 2 windows GREEN, linux 37/38 → fixture fix in `44048e1`, run
-3 all green: 38/38 + release build), sizes reported not budgeted. Next: Phase 10 Linux
-budgets + the friend's checklist above; AUR first publish against the
-next tag (not `v1.0.0`).
+State at handoff: `master` at `0980942` + the post-release fixes
+(crate `version = "1.1.0"`, this doc refresh), release **`v1.1.0`**
+published on GitHub with six assets (Windows exe 10,458,624 B ≤
+10,485,760; margin 27,136). Windows gates: `cargo test` **35 passed**,
+release warnings **7**, rule 10 = 13/12+1 (`main.rs:147`), gate 4
+isolated, all §15.6 gates PASS (5 human gates 2026-10-05),
+all nine Phase 6 budgets recorded in BENCH.md (5 =
+permanent UNSTABLE ruling, 8 = AT CAP). Linux: CI fully green (run 3:
+38/38 tests + release build) and the release dry-run 5/5 green, sizes
+reported not budgeted. **Next-release tag checklist:** bump
+`Cargo.toml`/`Cargo.lock`, add a `<release>` entry to
+`packaging/flatpak/io.github.KajeJeka.qpid.metainfo.xml`, push the tag
+(`release.yml` publishes). Then: Phase 10 Linux budgets + the friend's
+checklist above.

@@ -4,6 +4,8 @@ on:
     tags: ['v*']
   workflow_dispatch:   # dry-run: builds everything, skips publishing
 
+permissions: { contents: read }
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -111,7 +113,9 @@ jobs:
       - name: Create release, attach everything
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "q-pid $GITHUB_REF_NAME" \
             --notes "Windows exe, AppImage (x86_64 + aarch64), Flatpak bundle, AUR PKGBUILD render. Linux sizes reported per job; no Linux size budget set yet (see BENCH.md)."
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"

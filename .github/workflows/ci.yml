@@ -4,6 +4,8 @@ on:
     branches: [master]
   pull_request:
 
+permissions: { contents: read }
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -35,7 +37,7 @@ jobs:
       - name: Test (includes linux.rs unit tests)
         run: cargo test
       - name: Release build (report size; no Linux budget yet — linux-port.md §15)
-        run: cargo build --release && ls -l target/release/qpid
+        run: cargo build --release --locked && ls -l target/release/qpid
 
   aur:
     runs-on: ubuntu-latest
