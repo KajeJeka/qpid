@@ -454,6 +454,13 @@ taken on the post-fix build; warm-up stalls >300 ms 4 → 0 — trigger path cov
 close: size unchanged **10,452,992 B**, release warnings **7**, tests
 **34 passed** (task-11-report.md).
 
+**Release asset note (2026-10-06):** the exe shipped on the GitHub release
+(`qpid-v1.0.0.exe`) was rebuilt from the tagged tree after the version
+bump; identical `src/`, only the `Cargo.toml` version metadata differs.
+Result **10,452,480 B** (512 B smaller; still PASS, margin 33,280 B),
+release warnings re-verified **7**. Budgets were measured on the gate
+build above; the delta is metadata only, no source change.
+
 ### Phase 6 probes (acceptance §16)
 
 All automated unless marked human; release build, isolated `LOCALAPPDATA`,

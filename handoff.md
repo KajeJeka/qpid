@@ -7,9 +7,12 @@ the Phase 6 close record (work + struggles), then the Phase 5 body
 (integration details still accurate). Earlier handoffs and SDD ledgers
 (Phases 0–5) are in git history and `.superpowers/sdd/`.
 
-**Next phase (NOT started): Linux port + upload to GitHub.** The repo is
-local-only — `git remote -v` is empty; `v1.0.0` is tagged at `a5bede4`
-but has never been pushed. The Linux port will need the Windows-only
+**Next phase (NOT started): Linux port.** The repo is on GitHub
+(`origin` = https://github.com/KajeJeka/qpid, pushed 2026-10-06); the
+`v1.0.0` release is published at
+https://github.com/KajeJeka/qpid/releases/tag/v1.0.0 with the portable
+exe `qpid-v1.0.0.exe` attached (rebuilt from the tag, 10,452,480 B).
+The Linux port will need the Windows-only
 surface (`winit_hook`, `winapi.rs`, EcoQoS/trim, `Global\` mutex,
 named pipe, `RegisterHotKey`, cpal/WASAPI specifics) behind `cfg` gates —
 `cfg(not(windows))` dead-code lints are already an accepted open item
@@ -285,11 +288,14 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 ```
 
 State at handoff: `master`, **Phase 6 CLOSED**, tagged **`v1.0.0` =
-`a5bede4`**, tree clean, no git remote (never pushed). Gates:
+`a5bede4`**, pushed to GitHub, release `v1.0.0` published with the exe
+asset, tree clean. Gates:
 `cargo test` **34 passed** (31 + 3 from the §7.6 fix), release warnings
-**7**, exe **10,452,992 B** (cap 10,485,760, margin 32,768), rule 10 =
+**7**, release asset **10,452,480 B** (cap 10,485,760; measured gate
+build was 10,452,992 B, delta = version metadata only, see BENCH release
+note), rule 10 =
 13/12+1 (`main.rs:147`), gate 4 isolated, all §15.6 gates PASS (5 human
 gates 2026-10-05), all nine Phase 6 budgets recorded in BENCH.md (5 =
-permanent UNSTABLE ruling, 8 = AT CAP). Next phase: Linux port + GitHub
-upload — start a new session/plan for it; begin with `cfg` audit of the
-Windows-only surface and `gh`/remote setup.
+permanent UNSTABLE ruling, 8 = AT CAP). Next phase: Linux port — start a
+new session/plan for it; begin with a `cfg` audit of the Windows-only
+surface.

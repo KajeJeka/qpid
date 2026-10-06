@@ -4,6 +4,10 @@ A small folder-based audio player for Windows, written in Rust with a Slint UI. 
 
 It is built to strict resource limits: the executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [BENCH.md](BENCH.md); the normative design lives in [architecture.md](architecture.md).
 
+## Download
+
+Grab [`qpid-v1.0.0.exe`](https://github.com/KajeJeka/qpid/releases/download/v1.0.0/qpid-v1.0.0.exe) from the [releases page](https://github.com/KajeJeka/qpid/releases). It is a single portable executable: no installer, no dependencies. Put it anywhere and run it.
+
 ## Building and running
 
 ```powershell
@@ -132,7 +136,7 @@ The visibility sink from the winit hook does two jobs on minimize: it switches t
 
 ### 11. Where the numbers come from
 
-The nine resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate) are defined in architecture.md §2 and measured in BENCH.md. Current results at the v1.0.0 tag: 10,452,992 bytes, 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
+The nine resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate) are defined in architecture.md §2 and measured in BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap 10,485,760), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
 
 ## Repository layout
 
