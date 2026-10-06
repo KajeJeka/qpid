@@ -5,3 +5,5 @@
 /AppDir
 /linuxdeploy
 *.AppImage
+/handoff.md
+/IMPLEMENTATION.md

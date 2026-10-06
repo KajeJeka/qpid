@@ -117,5 +117,5 @@ jobs:
             || gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "q-pid $GITHUB_REF_NAME" \
-            --notes "Windows exe, AppImage (x86_64 + aarch64), Flatpak bundle, AUR PKGBUILD render. Linux sizes reported per job; no Linux size budget set yet (see BENCH.md)."
+            --notes "Windows exe, AppImage (x86_64 + aarch64), Flatpak bundle, AUR PKGBUILD render. Linux sizes reported per job; no Linux size budget set yet (see docs/BENCH.md)."
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"

@@ -2,7 +2,7 @@
 
 A small folder-based audio player for Windows and Linux, written in Rust with a Slint UI. Point it at a folder or a file, and it plays the folder as a naturally sorted playlist: seek bar, skip buttons, five playback speeds that keep pitch, session restore, and media-key support (Windows). A headless `--cli` mode runs the same engine without a window.
 
-It is built to strict resource limits: the Windows executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [BENCH.md](BENCH.md); the normative design lives in [architecture.md](architecture.md).
+It is built to strict resource limits: the Windows executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [docs/BENCH.md](docs/BENCH.md); the normative design lives in [docs/architecture.md](docs/architecture.md).
 
 ## Download
 
@@ -148,7 +148,7 @@ The visibility sink from the winit hook does two jobs on minimize: it switches t
 
 ### 11. Where the numbers come from
 
-The nine resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate) are defined in architecture.md §2 and measured in BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap 10,485,760), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
+The nine resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate) are defined in docs/architecture.md §2 and measured in docs/BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap 10,485,760), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
 
 ## Repository layout
 
@@ -170,11 +170,9 @@ The nine resource budgets (executable size, launch time, RAM while playing and m
 
 ## Documentation
 
-- [architecture.md](architecture.md) is the binding design: budgets, rules, state machine, acceptance tests.
-- [BENCH.md](BENCH.md) holds every measurement, the final v1.0.0 table, and the permanent rulings.
+- [docs/architecture.md](docs/architecture.md) is the binding design: budgets, rules, state machine, acceptance tests.
+- [docs/BENCH.md](docs/BENCH.md) holds every measurement, the final v1.0.0 table, and the permanent rulings.
 - [docs/USER_GUIDE.md](docs/USER_GUIDE.md) is the user-facing manual with keyboard shortcuts.
-- [IMPLEMENTATION.md](IMPLEMENTATION.md) tracks implementation status and recorded deviations.
-- [handoff.md](handoff.md) is the development session handoff: state, struggles, next phase.
 
 ## License
 
