@@ -1,0 +1,38 @@
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test
+        run: cargo test
+      - name: Release build + gates (warnings ≤ 7, size ≤ 10485760)
+        shell: pwsh
+        run: |
+          $out = cargo build --release 2>&1 | Out-String
+          $warn = ([regex]::Matches($out, '(?m)^\s*--> src[/\\]')).Count
+          Write-Host "warning locations in src: $warn"
+          if ($warn -gt 7) { Write-Host "::error::warning baseline exceeded"; exit 1 }
+          $size = (Get-Item target\release\qpid.exe).Length
+          Write-Host "exe size: $size"
+          if ($size -gt 10485760) { Write-Host "::error::size budget exceeded"; exit 1 }
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build deps (cpal/ALSA)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+        # Contingency: if linking fails for winit's xkbcommon/wayland/X11 deps,
+        # add: libxkbcommon-dev libwayland-dev libx11-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test (includes linux.rs unit tests)
+        run: cargo test
+      - name: Release build (report size; no Linux budget yet — linux-port.md §15)
+        run: cargo build --release && ls -l target/release/qpid
