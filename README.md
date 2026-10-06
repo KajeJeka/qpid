@@ -166,4 +166,4 @@ The nine resource budgets (executable size, launch time, RAM while playing and m
 
 ## License
 
-No license file has been chosen yet.
+MIT. See [LICENSE](LICENSE).

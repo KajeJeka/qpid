@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=q-pid
+Comment=Lightweight audio player for audiobooks, podcasts, and lectures
+Exec=qpid %f
+Icon=qpid
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+MimeType=audio/mpeg;audio/mp4;audio/flac;audio/ogg;audio/x-wav;
+StartupWMClass=qpid

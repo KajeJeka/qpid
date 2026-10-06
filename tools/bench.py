@@ -30,10 +30,10 @@ CLI binary reads; in UI mode there is no automated way to set speed and
 the run would silently measure 1x.
 
 Requires: psutil (pip install psutil --break-system-packages)
-On Windows only for minimize/foreground control (uses ctypes/user32); the
-process-sampling portion runs on any OS psutil supports, so `idle-visible`
-can be sanity-checked cross-platform, but minimize-dependent scenarios need
-Windows.
+On Windows only for minimize/foreground control (uses ctypes/user32), and on
+Linux/X11 via xdotool; the process-sampling portion runs on any OS psutil
+supports, so `idle-visible` can be sanity-checked cross-platform, but
+minimize-dependent scenarios need Windows or Linux/X11 with xdotool.
 """
 import argparse
 import csv
@@ -74,10 +74,30 @@ BUDGETS_CPU_PCT = {
 
 
 def minimize_window(pid: int) -> bool:
-    """Best-effort minimize via user32. Windows only. Returns True if a
-    window was found and minimized."""
-    if platform.system() != "Windows":
-        print("minimize is only supported on Windows; skipping", file=sys.stderr)
+    """Best-effort minimize. Windows: user32.ShowWindow. Linux/X11:
+    xdotool (search by pid, then windowminimize). Wayland: not supported —
+    compositors refuse external window control (same caveat as the
+    window-raise note in linux-port.md section 3); returns False with a
+    warning, so minimized-scenario budgets are X11-only for the first
+    Linux bench pass."""
+    system = platform.system()
+    if system == "Linux":
+        try:
+            out = subprocess.run(
+                ["xdotool", "search", "--pid", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            ids = out.stdout.split()
+            if not ids:
+                print("xdotool found no window (Wayland session?); cannot minimize", file=sys.stderr)
+                return False
+            subprocess.run(["xdotool", "windowminimize", ids[0]], timeout=5, check=False)
+            return True
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            print(f"minimize failed ({e}); install xdotool for X11 sessions", file=sys.stderr)
+            return False
+    if system != "Windows":
+        print("minimize is not supported on this platform; skipping", file=sys.stderr)
         return False
 
     user32 = ctypes.windll.user32

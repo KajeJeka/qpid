@@ -2,6 +2,7 @@
 name = "qpid"
 version = "1.0.0"
 edition = "2021"
+license = "MIT"
 default-run = "qpid"
 
 [[bin]]
