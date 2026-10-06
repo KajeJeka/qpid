@@ -4,8 +4,10 @@ Spec: `architecture.md`. This file tracks what is actually built, where it
 deviates from the spec, and what still needs verification (this skeleton was
 authored in a Linux container with no Windows/MSVC build environment; every
 build-time API guess made then was settled by the Phases 1–5 builds — see
-"Unverified" below. What is left open is the Phase 6 measurements and the
-human listening checks).
+"Unverified" below. Phase 6 (final measurement) is complete — results in
+`BENCH.md` "Phase 6 final table — v1.0.0 (2026-10-05)". What is left open
+is the human listening checks, delivered as the Phase 6 close checklist in
+`BENCH.md`).
 
 ## Status
 
@@ -184,7 +186,20 @@ human listening checks).
     ≤ 10,485,760), threads 11 idle / 12 playing (**AT CAP 12/12**), budgets
     5–7 not re-run (Phase 5 adds no steady-state CPU — one INFO
     `playing-2x-minimized` spot-check at 1.65%; see BENCH.md).
-- Phase 6 (final measurement): **in progress — results at close.**
+- Phase 6 (final measurement): **complete — all nine budgets re-measured on
+  the final build, results recorded** (BENCH.md "Phase 6 final table —
+  v1.0.0 (2026-10-05)"; evidence in
+  `.superpowers/sdd/2026-10-05-phase6-final-measurement/` task reports).
+  Budgets 1/2/3/4/6/7/9 **PASS**; budget 5 = **permanent ruling, 0.62%
+  median** (UNSTABLE — scheduler/heterogeneous-core variance, not carried to
+  1.1); budget 8 = **AT CAP (12/12, zero headroom)**. Acceptance §16.1–16.12
+  all PASS (§16.6 rides the Phase 3 evidence, §16.12 = the budget 7
+  scenario); security baseline + rule-10/gate-4 audits PASS. **One src fix
+  landed in Phase 6:** the §7.6 timing rule (commit `18aaf39` — Coarse
+  fallback for relative seeks after a >300 ms seek; 3 new unit tests,
+  `cargo test` 31 → 34; warm-up stalls >300 ms 4 → 0); every Lane B number
+  above is from the post-fix build, size unchanged 10,452,992 B, warnings 7.
+  Outstanding: the human listening checklist (BENCH.md, "Phase 6 close").
 
 ## Unverified — all resolved by the Phases 1–5 builds
 
@@ -269,11 +284,12 @@ no re-verification is needed before 1.0.
 ## Measurement status
 
 Numbers for the measured budgets are in `BENCH.md`. Measurement items
-(phases 1–4, status):
+(phases 1–4, status; Phase 6 close status follows):
 
 1. Human listen for clicks on pause/seek (cannot be automated), plus
    Phase 2 listening: pitch at each speed and clicks on speed change
-   (§16 test 4).
+   (§16 test 4) — **delivered as the "Human listening checklist (Phase 6
+   close)" section in `BENCH.md`**; results still to be reported.
 2. Budget 9 measured for Phase 4: 0.53/s ≤ 2 PASS (0.529/s primary,
    0.533/s cross-check), method + limitations in BENCH.md.
 3. Budgets 1–8 PASS except budget 5, recorded **UNSTABLE
@@ -282,6 +298,24 @@ Numbers for the measured budgets are in `BENCH.md`. Measurement items
    budget-5 note). Thread budget (8) was measured FAIL at 11 vs 4;
    isolation recorded in `BENCH.md` (Slint floor 9, CLI floor 7) and the
    budget was revised to **12** in architecture.md §2.8.
+
+**Phase 6 close status (2026-10-05/06, final build):**
+
+- All nine budgets re-measured — `BENCH.md` "Phase 6 final table —
+  v1.0.0 (2026-10-05)". Budgets 1/2/3/4/6/7/9 PASS (1: 10,452,992 B;
+  2: 20.5 ms warm median; 3: 5.43 MB; 4: 5.99 MB official / 3.20 MB
+  trim info; 6: 1.68%; 7: 0.00%; 9: 0.55/s + soak 0.281/s).
+- **Budget 5 final verdict = permanent ruling: 0.62% median** of 5 ×
+  300 s P-core-pinned runs (`--affinity --repeat`, harness fix done) >
+  0.5% gate → **UNSTABLE, permanently attributed to
+  scheduler/heterogeneous-core variance; not carried forward to 1.1 as an
+  open question** (ruling + citations in BENCH.md).
+- **Budget 8 = AT CAP (12/12, zero headroom)** — 11 idle / 12 playing /
+  12 soak max; spawn inventory identical to `40b0719`, no new thread.
+- **§7.6 was implemented in Phase 6** (this is the only src change of the
+  phase): commit `18aaf39`, Coarse fallback for relative seeks after a
+  >300 ms seek; 3 unit tests added (`cargo test` 31 → 34); §16.5 warm-up
+  stalls >300 ms went 4 → 0. All Lane B numbers above are post-fix.
 
 Phase 3 verification status: all three probes (mixed-rate advance,
 restore A/B/C, acceptance 6 kill/relaunch) are automated and PASS — see

@@ -424,3 +424,80 @@ user on 2026-10-05.
 | Tests 31/31, release warnings = 7 | **PASS** — `cargo test` **31/31** re-run at HEAD (branch-review cycle); release warnings **7** = baseline (branch-review build at this HEAD, same dead-code set) |
 | Rule 10 audit | **1 pre-existing exception, no Phase 5 violation** — equivalent of `grep -n -B1 "eprintln!" src/*.rs src/**/*.rs`: 13 hits, 12 have `debug_assertions` on the previous line; the one exception is `src/main.rs:147` `eprintln!("unknown command: ...")` in the dev-only `--cli` stdin loop, from Phase 1 (`dca6282`, 2026-09-24), untouched by Phase 5 |
 | Gate 4 | **PASS** — `grep -rn "winit_030" src` → only `src/winit_hook.rs:8` |
+
+## Phase 6 final table — v1.0.0 (2026-10-05)
+
+Final measurement pass (architecture.md §15 Phase 6) on the v1.0.0 build
+(`target\release\qpid.exe`, 10,452,992 B, mtime 2026-10-05 22:33:34). **All
+Lane B numbers below were taken on the post-§7.6-fix build** (commit
+`18aaf39`); nothing was rebuilt afterwards. Every figure traces to a task
+report in `.superpowers/sdd/2026-10-05-phase6-final-measurement/`.
+
+| # | Budget | Target | Fresh result (post-fix build) | Verdict | Method / scenario ref |
+|---|---|---|---|---|---|
+| 1 | Exe size | ≤ 10,485,760 B | **10,452,992 B** (margin 32,768 B) | **PASS** | gate check after the release build — task-11-report.md |
+| 2 | Startup to first frame | ≤ 300 ms | **20.5 ms** median of 5 warm (cold first run 35.1 ms; warm 14.3–36.1) | **PASS** | Python UI probe, `EnumWindows` first-visible-window, isolated `LOCALAPPDATA` — task-11-report.md |
+| 3 | USS, visible, 1x | ≤ 25 MB | **5.43 MB** | **PASS** | `playing-1x-visible`, release UI, 300 s — task-11-report.md |
+| 4 | USS, minimized, 1x | ≤ 15 MB | **5.99 MB** official (300 s, `QPID_NO_TRIM=1`); **3.20 MB** trim-armed (60 s, info) | **PASS** | `playing-1x-minimized`, release UI ×2 — task-11-report.md |
+| 5 | CPU, minimized, 1x | ≤ 0.5% | **0.62% median** (0.58 / 0.62 / 0.62 / 0.63 / 0.78), 5 × 300 s, P-core pinned | **UNSTABLE — permanent ruling** (not a clean PASS; **not carried to 1.1** — see "Budget 5 permanent ruling" above) | `--affinity 0,1,2,3,4,5,6,7 --repeat 5` on `playing-1x-minimized`, EcoQoS engaged while minimized — task-12-report.md |
+| 6 | CPU, playing at 2x | ≤ 2% | **1.68%** avg | **PASS** | `playing-2x-minimized`, release `--cli` (bench presses `s`×3), 300 s — task-11-report.md; cross-check: 30-min minimized 2× soak (debug build, not budget-comparable) task-16-report.md |
+| 7 | Paused > 10 s | 0.0% CPU | **0.00%** | **PASS** | `paused-over-10s`, release `--cli`, 60 s — task-11-report.md |
+| 8 | Threads | ≤ 12 | **12** max observed (idle 11, playing 12, CLI 2×/paused 7, soak 12) | **AT CAP (12/12, zero headroom)** — never a bare PASS; any new thread is a budget failure | max `threads` from task-11 re-run CSVs + task-16 soak; spawn inventory unchanged since `40b0719` — task-17-report.md |
+| 9 | Wakeups/s, background | ≤ 2.00/s | **0.55/s** (`wakes=33 uptime_s=60.0`); soak cross-check **0.281/s** | **PASS** | release `--cli`, 60 s warmup then `w` — task-11-report.md; 30-min minimized 2× soak — task-16-report.md |
+
+**Phase 6 change note:** one src fix landed in Phase 6 — **§7.6 timing rule
+implemented (commit `18aaf39`, Coarse fallback for relative seeks after a
+>300 ms seek; 3 unit tests added, `cargo test` 31 → 34; all Lane B numbers
+taken on the post-fix build; warm-up stalls >300 ms 4 → 0)**. Gate values at
+close: size unchanged **10,452,992 B**, release warnings **7**, tests
+**34 passed** (task-11-report.md).
+
+### Phase 6 probes (acceptance §16)
+
+All automated unless marked human; release build, isolated `LOCALAPPDATA`,
+probes under `$env:TEMP\opencode\`. §16.10's criterion text is
+**"The app pauses without a crash"** (architecture.md §16.10) — the spec
+defines no pre-`d` position bound, which is what the corrected-assert re-run
+measured against.
+
+| § | Acceptance test | Result | Evidence |
+|---|---|---|---|
+| §16.1 | 30-file folder, numeric order | **PASS** — titles exactly 1…30 (natural: `2` before `10`), first track `1`, no `Message(`, exit 0 | task-1-report.md |
+| §16.2 | single m4a picks up siblings | **PASS** — first `TrackChanged` `index 3 / count 3`, `duration_ms` 60027, `n` no-op, exit 0 | task-2-report.md |
+| §16.3 | rapid seek ×10 | **PASS** — delta 1,180 ms ∈ [0, W+500] (W 1,511 ms), pos advanced 3,010 ms over the next 3 s (not stuck), `underruns=0`, exit 0 | task-13-report.md (Test 3) |
+| §16.4 | 20 speed switches | **PASS** — 20 `speed ->` lines, cycle `[1.25,1.5,2,0.5,1]×4`, final 1x, 5 s delta 5,000 ms (no drift), `underruns=0`, no `Message(` | task-13-report.md (Test 4); **clicks → listening checklist below** |
+| §16.5 | 3-hour file, seek to middle < 300 ms | **PASS** — 35.8 / 30.7 / 32.9 ms, each lands +15,000 ms; fixture 10,800,072 ms; warm-up stalls >300 ms **4 → 0** (§7.6 fix) | task-14-report.md |
+| §16.6 | close/reopen → same file, same position, paused | **PASS (Phase 3)** — restore probes A/B/C + kill/relaunch acceptance 6 (`position_ms = 60012`, `StateChanged(Paused)` only) | BENCH "Phase 3 probes" |
+| §16.7 | corrupt file skipped with message | **PASS** — `Message("Skipping unreadable file: 2.mp3")`, next `TrackChanged` index 3, exit 0 | task-3-report.md |
+| §16.8 | unicode paths (accents, CJK, double space) | **PASS** — 7/7 assertions, folder endswith `música 测试 folder`, `f` advanced ≥ 15 s, exit 0 | task-4-report.md |
+| §16.9 | 500-file folder opens < 200 ms | **PASS** — warm open latency median **63.5 ms**, worst **70.6 ms** (cold info 76.2 ms); definition `t_track − t_ready` | task-5-report.md |
+| §16.10 | change default output device → pauses without a crash | **PASS** — automated 3/3 (corrected asserts: `StateChanged(Paused)` + `Message("Output device changed — press Play to resume")`, detection ≤ 1,945 ms, resume fold Δ within ±12 ms, exit 0) + **human unplug gate PASS (2026-10-05)**, BENCH §15.6 | task-15-report.md; BENCH "Phase 5 exit criteria" |
+| §16.11 | 30-min minimized 2× soak | **PASS** — 1,861 s, `underruns=0` on 354/354 wake lines, wakes 0.281/s ≤ 2.00, threads ≤ 12, `[eco] EcoQoS on` 2/2; avg CPU 48.83% = debug-build info (budget 6 official = row 6) | task-16-report.md |
+| §16.12 | pause 15 s → no stream/decoder/timers, 0.0% CPU | **PASS (budget 7 scenario)** — 0.00% avg over 60 s `paused-over-10s` | task-11-report.md (row 7) |
+
+Also closed in Phase 6: **security baseline PASS** ("zero network surface in
+1.0", section above — task-6-report.md) and the **rule audits PASS** (rule
+10: 13 `eprintln!` hits / 12 guarded / documented exception `src/main.rs:147`;
+gate 4: `winit_030` only `src/winit_hook.rs:8` — task-10-report.md).
+
+### Human listening checklist (Phase 6 close)
+
+Ear-only criteria — not automatable; report results back to the user.
+
+- [ ] **Pause/seek clicks:** no clicks on pause, resume or seek — audio
+  changes only as gentle fades (§15.1: "seek and pause produce no clicks").
+- [ ] **Pitch at each of the 5 speeds** (1x / 1.25x / 1.5x / 2x / 0.5x):
+  correct, no pitch shift — especially **no pitch shift at 1x after 20
+  speed switches** (§16.4; the 1x 5 s delta is already automated at
+  5,000 ms — this check is the ear).
+- [ ] **Speed-switch clicks ×20:** no click louder than the fade ramps
+  (§16.4) — press `s` through 4 full cycles while playing.
+- [ ] **Speech intelligible at 2×** (Phase 5 listening criterion): dialogue
+  stays understandable at the 2x speed.
+- [ ] **Rapid-seek audio continuity** (§16.3): after `f` ×10 in quick
+  succession, audio resumes cleanly — no stutter, no gap, no stuck tail.
+- [ ] **Optional — real default-device switch** (§16.10): switch the
+  Windows default output device while playing → app pauses with the
+  "Output device changed" message, then resumes on Play. (Phase 5 human
+  unplug gate already **PASS 2026-10-05**; automated path 3/3 in
+  task-15-report.md.)

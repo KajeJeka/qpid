@@ -1,10 +1,33 @@
-# handoff.md — q-pid session handoff (Phase 5, 2026-10-05)
+# handoff.md — q-pid session handoff (Phase 6 close / v1.0.0, 2026-10-06)
 
 For the next agent working on this repo. Read this first, then
 `architecture.md` (binding), `IMPLEMENTATION.md` (status), `BENCH.md`
-(§15.6 exit table at the end), and `docs/USER_GUIDE.md`. This handoff
-covers **Phase 5 only**; earlier handoffs and SDD ledgers (Phases 0–4)
-are in git history and `.superpowers/sdd/`.
+(final table at the end), and `docs/USER_GUIDE.md`. This handoff's body
+covers **Phase 5**; the Phase 6 state is the block right below. Earlier
+handoffs and SDD ledgers (Phases 0–5) are in git history and
+`.superpowers/sdd/`.
+
+## State at Phase 6 (measurement complete → v1.0.0)
+
+- **Phase 6 final measurement is complete** — all nine budgets fresh on the
+  final build, `BENCH.md` "Phase 6 final table — v1.0.0 (2026-10-05)",
+  evidence in `.superpowers/sdd/2026-10-05-phase6-final-measurement/`.
+- **Budget 5 is settled (do not relitigate): permanent UNSTABLE ruling** —
+  0.62% median (5 × 300 s, P-core pinned, `bench.py --affinity/--repeat`),
+  attributed to scheduler/heterogeneous-core variance, **not carried to
+  1.1**. This closes lesson 9's "robustification is a future task" — the
+  harness fix is done and the ruling is recorded in BENCH.md.
+- **Budget 8: AT CAP (12/12, zero headroom)** — never write it as a bare
+  PASS; any new thread is a budget failure (§18.2).
+- **§7.6 was implemented in Phase 6** (the phase's only src change): commit
+  `18aaf39`, Coarse fallback for relative seeks after a >300 ms seek,
+  3 unit tests → `cargo test` **34**, size unchanged **10,452,992 B**,
+  warnings **7**; §16.5 warm-up stalls 4 → 0. Every Lane B number is
+  post-fix.
+- Remaining Close steps (controller): whole-branch review, `Cargo.toml`
+  version → `1.0.0` + `git tag v1.0.0`.
+- Outstanding for the user: the **human listening checklist**
+  (`BENCH.md`, "Human listening checklist (Phase 6 close)").
 
 ## What the project is
 
@@ -44,7 +67,7 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 8. **All §15.6 exit gates PASS, including all 5 human gates** (user
    reported 2026-10-05). Final numbers below.
 
-## Final gate numbers (final build = `40b0719`, docs commits after it don't rebuild)
+## Final gate numbers (Phase 5 snapshot; final build then = `40b0719` — superseded by the Phase 6 block above)
 
 - `cargo test` **31/31**; release warnings **7** (baseline dead-code set).
 - Exe **10,452,992 B** ≤ 10,485,760 (margin **32,768 B** — tightest gate).
@@ -108,9 +131,9 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 8. **Measure exe size after EVERY task** (user rule). Warning-count
    command quirk: `Select-String "warning" | Measure-Object -Line` returns
    8 (7 headers + summary) — the gate is the 7 warning headers.
-9. **Do not relitigate budget-5 CPU UNSTABLE** (Phase 4 ruling stands);
-   bench.py robustification (P-core pin / median-of-N) is a separate
-   future task.
+9. **Do not relitigate budget-5 CPU UNSTABLE** — **settled in Phase 6**
+   (permanent ruling, BENCH.md; `bench.py` gained `--affinity` P-core pin +
+   `--repeat` median-of-N, pinned median 0.62% > 0.5% gate). Closed.
 10. **Namespace ruling:** mutex + pipe are both machine-global
     (`Global\qpid-instance`, `\\.\pipe\qpid-open`) — one player per
     machine; **do not session-suffix** (cross-session handoff accepted).
@@ -147,7 +170,7 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 ## Verification commands
 
 ```powershell
-cargo test                                   # expect 31 passed
+cargo test                                   # expect 34 passed (31 + 3 from the §7.6 fix)
 cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 (Get-Item target\release\qpid.exe).Length    # cap 10,485,760; now 10,452,992 (margin 32,768)
 # rule 10 (previous line must show debug_assertions; 13 hits, 12 guarded,
@@ -158,6 +181,9 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 # threads: 11 idle / 12 playing — ≤ 12, AT CAP; any new thread = budget failure
 ```
 
-State at handoff: `master`, clean tree, docs-only commits after `40b0719`
-(no rebuild needed), 31/31 tests, 7 release warnings, all §15.6 gates
-PASS (5 human gates 2026-10-05).
+State at handoff: `master`, Phase 6 measurement complete, tree clean before
+this doc edit (controller commits Task 18's three docs, then review + version
+bump + tag). Gates: `cargo test` **34 passed** (31 + 3 from the §7.6 fix),
+release warnings **7**, exe **10,452,992 B** (cap 10,485,760, margin 32,768),
+all §15.6 gates PASS (5 human gates 2026-10-05), all nine Phase 6 budgets
+recorded in BENCH.md (5 = permanent ruling, 8 = AT CAP).
