@@ -123,21 +123,31 @@ def sample_process(proc: psutil.Process) -> dict:
 
 
 def run_scenario(args) -> None:
-    avg_cpus = []
+    runs = []  # (avg CPU or None if no samples, pinned flag)
     for i in range(args.repeat):
         suffix = f"_run{i + 1}" if args.repeat > 1 else ""
         if args.repeat > 1:
             print(f"\n=== run {i + 1}/{args.repeat} ===")
-        avg_cpus.append(run_once(args, suffix))
+        runs.append(run_once(args, suffix))
 
     if args.repeat > 1:
         print("\n--- repeat summary ---")
-        for i, a in enumerate(avg_cpus, 1):
-            print(f"run {i} avg CPU: {a:.2f}%")
-        print(f"median avg CPU: {statistics.median(avg_cpus):.2f}%  ({args.repeat} runs)")
+        for i, (avg, pinned) in enumerate(runs, 1):
+            label = "NO SAMPLES" if avg is None else f"{avg:.2f}%"
+            if args.affinity:
+                label += f" (pinned={pinned})"
+            print(f"run {i} avg CPU: {label}")
+        sampled = [avg for avg, _pinned in runs if avg is not None]
+        if not sampled:
+            print(f"median avg CPU: NO SAMPLES  ({args.repeat} runs)")
+        else:
+            pin = f", pinned {sum(1 for _a, p in runs if p)}/{len(runs)}" if args.affinity else ""
+            print(f"median avg CPU: {statistics.median(sampled):.2f}%  ({len(sampled)} runs{pin})")
+    elif runs and runs[0][0] is None:
+        print("NO SAMPLES")
 
 
-def run_once(args, suffix: str) -> float:
+def run_once(args, suffix: str) -> tuple:
     exe = Path(args.exe)
     if not exe.exists():
         print(f"exe not found: {exe}", file=sys.stderr)
@@ -159,10 +169,12 @@ def run_once(args, suffix: str) -> float:
         print("process exited immediately; check the exe path/args", file=sys.stderr)
         sys.exit(1)
 
+    pinned = False
     if args.affinity:
         try:
             cpus = [int(c) for c in args.affinity.split(",") if c.strip()]
             proc.cpu_affinity(cpus)
+            pinned = True
             print(f"pinned to CPUs {cpus}")
         except (ValueError, psutil.Error) as e:
             print(f"warning: could not set CPU affinity ({e}); continuing unpinned", file=sys.stderr)
@@ -245,7 +257,8 @@ def run_once(args, suffix: str) -> float:
     print(f"wrote {out_path}")
 
     summarize(args.scenario, rows)
-    return sum(r["cpu_pct"] for r in rows) / len(rows) if rows else 0.0
+    avg = sum(r["cpu_pct"] for r in rows) / len(rows) if rows else None
+    return avg, pinned
 
 
 def summarize(scenario: str, rows: list) -> None:

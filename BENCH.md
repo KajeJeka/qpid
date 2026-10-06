@@ -10,6 +10,7 @@ re-measurements (rows 1/3/4/5/7/9) taken 2026-10-04 — see the
 Phase 5 measurements (Windows integration) taken 2026-10-05 — rows
 4/6/8, the EcoQoS soak, and the §15.6 exit-criteria table in the
 Phase 5 sections at the bottom of this file.
+Phase 6 final measurements: see `## Phase 6 final table — v1.0.0 (2026-10-05/06)` at the end of this file.
 
 ## Budgets (architecture.md §2)
 
@@ -18,7 +19,7 @@ Phase 5 sections at the bottom of this file.
 | 1 | Exe size | ≤ 10 MB | **10,452,992 B (9.97 MB)** — Phase 5 final build (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B**); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Phase 4 Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
 | 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
-| 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official, 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
+| 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official for Phase 5 (superseded by the Phase 6 final table), 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
 | 5 | CPU, minimized, 1x | ≤ 0.5% | **Phase 6 (2026-10-05): 0.62% median of 5 runs** (0.58 / 0.62 / 0.62 / 0.63 / 0.78), 300 s each, P-core pinned (`--affinity 0,1,2,3,4,5,6,7 --repeat 5`, EcoQoS engaged while minimized); Phase 4 was 0.44–0.98% interleaved A/B spread, n=4 per build (2026-10-04) — **see permanent ruling below** | **UNSTABLE — permanently attributed to scheduler/heterogeneous-core variance** (permanent ruling below) |
 | 6 | CPU, playing at 2x | ≤ 2% | 1.57–1.88% (5 runs; see scenario below); **Phase 3 spot-check: 1.63% avg (1 run)**; **Phase 4 control: 1.82% (2026-10-04)**; **Phase 5 spot-check: 1.65% (1 run, 2026-10-05, INFO — see Phase 5 CPU note)** | **PASS** |
 | 7 | Paused > 10 s | 0.0% CPU | **Phase 4 ended >10 s (probe, 2026-10-03):** 0 CPU-s over the 15 s fully-released window, handles 202 → 185, wake rate 0/s; **Phase 4 paused, 60 s re-run (2026-10-04):** 0.00%, USS 1.75 MB, 9 threads (`bench_results/paused-over-10s.csv`; controller's 30 s run same day also 0.00%); history (Phase 2, 2026-09-24): 0.00% over 30 s, USS 1.84 MB, handles −17 | **PASS** |
@@ -425,9 +426,10 @@ user on 2026-10-05.
 | Rule 10 audit | **1 pre-existing exception, no Phase 5 violation** — equivalent of `grep -n -B1 "eprintln!" src/*.rs src/**/*.rs`: 13 hits, 12 have `debug_assertions` on the previous line; the one exception is `src/main.rs:147` `eprintln!("unknown command: ...")` in the dev-only `--cli` stdin loop, from Phase 1 (`dca6282`, 2026-09-24), untouched by Phase 5 |
 | Gate 4 | **PASS** — `grep -rn "winit_030" src` → only `src/winit_hook.rs:8` |
 
-## Phase 6 final table — v1.0.0 (2026-10-05)
+## Phase 6 final table — v1.0.0 (2026-10-05/06)
 
-Final measurement pass (architecture.md §15 Phase 6) on the v1.0.0 build
+Final measurement pass (architecture.md §15 Phase 6, 2026-10-05/06) on the
+v1.0.0 build
 (`target\release\qpid.exe`, 10,452,992 B, mtime 2026-10-05 22:33:34). **All
 Lane B numbers below were taken on the post-§7.6-fix build** (commit
 `18aaf39`); nothing was rebuilt afterwards. Every figure traces to a task
@@ -448,7 +450,7 @@ report in `.superpowers/sdd/2026-10-05-phase6-final-measurement/`.
 **Phase 6 change note:** one src fix landed in Phase 6 — **§7.6 timing rule
 implemented (commit `18aaf39`, Coarse fallback for relative seeks after a
 >300 ms seek; 3 unit tests added, `cargo test` 31 → 34; all Lane B numbers
-taken on the post-fix build; warm-up stalls >300 ms 4 → 0)**. Gate values at
+taken on the post-fix build; warm-up stalls >300 ms 4 → 0 — trigger path covered by 3 unit tests + 12-call-site review, not re-exercised this run (task-14 caveat))**. Gate values at
 close: size unchanged **10,452,992 B**, release warnings **7**, tests
 **34 passed** (task-11-report.md).
 
@@ -466,7 +468,7 @@ measured against.
 | §16.2 | single m4a picks up siblings | **PASS** — first `TrackChanged` `index 3 / count 3`, `duration_ms` 60027, `n` no-op, exit 0 | task-2-report.md |
 | §16.3 | rapid seek ×10 | **PASS** — delta 1,180 ms ∈ [0, W+500] (W 1,511 ms), pos advanced 3,010 ms over the next 3 s (not stuck), `underruns=0`, exit 0 | task-13-report.md (Test 3) |
 | §16.4 | 20 speed switches | **PASS** — 20 `speed ->` lines, cycle `[1.25,1.5,2,0.5,1]×4`, final 1x, 5 s delta 5,000 ms (no drift), `underruns=0`, no `Message(` | task-13-report.md (Test 4); **clicks → listening checklist below** |
-| §16.5 | 3-hour file, seek to middle < 300 ms | **PASS** — 35.8 / 30.7 / 32.9 ms, each lands +15,000 ms; fixture 10,800,072 ms; warm-up stalls >300 ms **4 → 0** (§7.6 fix) | task-14-report.md |
+| §16.5 | 3-hour file, seek to middle < 300 ms | **PASS** — 35.8 / 30.7 / 32.9 ms, each lands +15,000 ms; fixture 10,800,072 ms; warm-up stalls >300 ms **4 → 0** (§7.6 fix) — trigger path covered by 3 unit tests + 12-call-site review, not re-exercised this run (task-14 caveat) | task-14-report.md |
 | §16.6 | close/reopen → same file, same position, paused | **PASS (Phase 3)** — restore probes A/B/C + kill/relaunch acceptance 6 (`position_ms = 60012`, `StateChanged(Paused)` only) | BENCH "Phase 3 probes" |
 | §16.7 | corrupt file skipped with message | **PASS** — `Message("Skipping unreadable file: 2.mp3")`, next `TrackChanged` index 3, exit 0 | task-3-report.md |
 | §16.8 | unicode paths (accents, CJK, double space) | **PASS** — 7/7 assertions, folder endswith `música 测试 folder`, `f` advanced ≥ 15 s, exit 0 | task-4-report.md |

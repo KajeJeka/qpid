@@ -38,7 +38,7 @@
 | `docs/USER_GUIDE.md` | accuracy sweep vs HEAD code | 8 |
 | `Cargo.toml` | `version = "1.0.0"` | 20 |
 | `handoff.md` | Phase 6 state refresh | 18 |
-| `.superpowers/sdd/2026-10-05-phase6-final-measurement/` | briefs/reports (committed by controller) | all |
+| `.superpowers/sdd/2026-10-05-phase6-final-measurement/` | briefs/reports (gitignored workspace artifacts — ruling R2, never committed) | all |
 
 No `src/` or `ui/` changes are planned.
 
@@ -216,7 +216,7 @@ Method split (documented in BENCH): soak proves **underruns, budget 8, budget 9*
 
 - [ ] Review package over Phase 6 range (`9207694..HEAD`) via `scripts/review-package`; dispatch final code reviewer on the most capable model (superpowers:requesting-code-review pattern) with brief + ledger parked/minor list.
 - [ ] Findings → ONE fix dispatch + one scoped re-review (SDD final-review rule); residuals adjudicated with rulings in the ledger.
-- [ ] Re-run final gates after any fix: `cargo test` 31, warnings 7, size ≤ cap, rule 10, gate 4.
+- [ ] Re-run final gates after any fix: `cargo test` 34 post-§7.6-fix (31 pre-fix baseline), warnings 7, size ≤ cap, rule 10, gate 4.
 
 ### Task 20: Version bump + tag (Close)
 
