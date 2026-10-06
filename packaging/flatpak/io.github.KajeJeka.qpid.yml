@@ -32,7 +32,8 @@ modules:
     build-commands:
       - cargo build --release --locked
       - install -Dm755 target/release/qpid /app/bin/qpid
-      - sed 's/^Icon=qpid$/Icon=io.github.KajeJeka.qpid/'
+      - mkdir -p /app/share/applications &&
+          sed 's/^Icon=qpid$/Icon=io.github.KajeJeka.qpid/'
           assets/qpid.desktop
           > /app/share/applications/io.github.KajeJeka.qpid.desktop
       - install -Dm644 assets/icon.png
