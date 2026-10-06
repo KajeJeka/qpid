@@ -1,0 +1,32 @@
+# Maintainer: Kaje Jeka <gabrielalmeidathe.vila1@gmail.com>
+# Template: CI substitutes @VERSION@ and @SHA256@ at release time
+# (linux-port.md section 13 — checksum computed, never invented).
+pkgname=qpid
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Lightweight audio player for audiobooks, podcasts, and lectures'
+arch=('x86_64' 'aarch64')
+url='https://github.com/KajeJeka/qpid'
+license=('MIT')
+depends=('alsa-lib' 'fontconfig' 'gcc-libs' 'glibc')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/KajeJeka/qpid/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('@SHA256@')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/qpid "$pkgdir/usr/bin/qpid"
+  install -Dm644 assets/qpid.desktop "$pkgdir/usr/share/applications/qpid.desktop"
+  install -Dm644 assets/icon.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/qpid.png"
+}

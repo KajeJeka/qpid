@@ -36,3 +36,46 @@ jobs:
         run: cargo test
       - name: Release build (report size; no Linux budget yet — linux-port.md §15)
         run: cargo build --release && ls -l target/release/qpid
+
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PKGBUILD (bash -n + ref-aware render)
+        shell: bash
+        run: |
+          set -euo pipefail
+          P=packaging/aur/PKGBUILD
+          bash -n "$P"
+          grep -Fq 'pkgname=qpid' "$P"
+          grep -Fq "license=('MIT')" "$P"
+          grep -Fq "'alsa-lib'" "$P"
+          grep -Fq "'fontconfig'" "$P"
+          grep -Fq 'archive/refs/tags/v$pkgver.tar.gz' "$P"
+          grep -Fq '@VERSION@' "$P"
+          grep -Fq '@SHA256@' "$P"
+          # R-L4: tarball URL derived from github.ref — never a hardcoded tag,
+          # so a branch/dispatch dry-run fetches an archive that exists (no 404).
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          else
+            VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+            URL="https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz"
+          fi
+          echo "render pkgver=$VERSION from $URL"
+          curl -fsSL "$URL" -o src.tgz
+          SHA="$(sha256sum src.tgz | cut -d' ' -f1)"
+          sed -e "s/@VERSION@/${VERSION}/" -e "s/@SHA256@/${SHA}/" "$P" > PKGBUILD.rendered
+          bash -n PKGBUILD.rendered
+          if grep -qE '@(VERSION|SHA256)@' PKGBUILD.rendered; then
+            echo "::error::template placeholder not substituted"
+            exit 1
+          fi
+          grep -qE '^pkgver=[0-9]+\.[0-9]+\.[0-9]+$' PKGBUILD.rendered
+          grep -qE "^sha256sums=\('[0-9a-f]{64}'\)$" PKGBUILD.rendered
+          if command -v makepkg >/dev/null 2>&1; then
+            makepkg --printsrcinfo -p PKGBUILD.rendered
+          else
+            echo "makepkg unavailable on this runner (not Arch); static checks only"
+          fi

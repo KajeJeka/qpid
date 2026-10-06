@@ -1,0 +1,40 @@
+# Self-hosted Flatpak, bundled onto GitHub Releases (user decision
+# 2026-10-06 — not Flathub). linux-port.md section 12.
+app-id: io.github.KajeJeka.qpid
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'   # verify the branch exists on Flathub when this runs; fallback 25.08
+sdk: org.freedesktop.Sdk
+command: qpid
+finish-args:
+  - --socket=pulseaudio     # standard Flatpak audio grant (ALSA-over-PulseAudio / PipeWire pulse socket)
+  - --socket=wayland
+  - --socket=fallback-x11
+  # home:ro covers session restore of a last-folder outside ~/Music when
+  # no dialog was used (section 12's documented quirk); file dialogs
+  # themselves go through rfd's XDG portal and need no grant.
+  # Contingency: if the friend reports NO SOUND, cpal's ALSA backend may
+  # need raw device access -> add --device=all and re-test (deliberate
+  # sandbox weakening, keep the comment either way).
+  - --filesystem=home:ro
+modules:
+  - name: qpid
+    buildsystem: simple
+    build-options:
+      build-args:
+        # Self-hosted only: cargo needs the network inside the build
+        # sandbox. Flathub would require cargo-vendored sources instead —
+        # rework this line only if a Flathub submission ever happens.
+        - --share=network
+    build-commands:
+      - cargo build --release --locked
+      - install -Dm755 target/release/qpid /app/bin/qpid
+      - sed 's/^Icon=qpid$/Icon=io.github.KajeJeka.qpid/'
+          assets/qpid.desktop
+          > /app/share/applications/io.github.KajeJeka.qpid.desktop
+      - install -Dm644 assets/icon.png
+          /app/share/icons/hicolor/256x256/apps/io.github.KajeJeka.qpid.png
+      - install -Dm644 packaging/flatpak/io.github.KajeJeka.qpid.metainfo.xml
+          /app/share/metainfo/io.github.KajeJeka.qpid.metainfo.xml
+    sources:
+      - type: dir
+        path: ../..

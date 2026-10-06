@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.KajeJeka.qpid</id>
+  <name>q-pid</name>
+  <summary>Lightweight audio player for audiobooks, podcasts, and lectures</summary>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>A folder-based audio player: naturally sorted playlists, seek bar,
+    ±15 s skips, five pitch-preserving playback speeds, session restore,
+    and strict resource budgets. Formats: mp3, m4a, m4b, aac, flac, ogg, wav.</p>
+  </description>
+  <launchable type="desktop-id">io.github.KajeJeka.qpid.desktop</launchable>
+  <url type="homepage">https://github.com/KajeJeka/qpid</url>
+  <releases>
+    <release version="1.1.0" date="2026-10-06"/>
+  </releases>
+</component>
