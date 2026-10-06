@@ -27,8 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build deps (cpal/ALSA)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - name: Build deps (ALSA/fontconfig)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libfontconfig1-dev pkg-config
         # Contingency: if linking fails for winit's xkbcommon/wayland/X11 deps,
         # add: libxkbcommon-dev libwayland-dev libx11-dev
       - uses: dtolnay/rust-toolchain@stable
