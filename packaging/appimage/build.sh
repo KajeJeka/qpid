@@ -19,9 +19,14 @@ chmod +x linuxdeploy
 # CI containers have no FUSE: extract-and-run instead of mounting.
 export APPIMAGE_EXTRACT_AND_RUN=1
 
+# linuxdeploy keeps the file's basename, but the desktop entry says
+# Icon=qpid — deploy the icon under that name or resolution fails.
+ICON_NAME_DIR="$(mktemp -d)"
+cp assets/icon.png "$ICON_NAME_DIR/qpid.png"
+
 ./linuxdeploy \
   --appdir AppDir \
   --executable target/release/qpid \
   --desktop-file assets/qpid.desktop \
-  --icon-file assets/icon.png \
+  --icon-file "$ICON_NAME_DIR/qpid.png" \
   --output appimage
