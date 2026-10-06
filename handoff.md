@@ -1,33 +1,136 @@
-# handoff.md — q-pid session handoff (Phase 6 close / v1.0.0, 2026-10-06)
+# handoff.md — q-pid session handoff (Phase 6 CLOSED / v1.0.0 tagged, 2026-10-06)
 
 For the next agent working on this repo. Read this first, then
 `architecture.md` (binding), `IMPLEMENTATION.md` (status), `BENCH.md`
-(final table at the end), and `docs/USER_GUIDE.md`. This handoff's body
-covers **Phase 5**; the Phase 6 state is the block right below. Earlier
-handoffs and SDD ledgers (Phases 0–5) are in git history and
-`.superpowers/sdd/`.
+(final table at the end), and `docs/USER_GUIDE.md`. The block below is
+the Phase 6 close record (work + struggles), then the Phase 5 body
+(integration details still accurate). Earlier handoffs and SDD ledgers
+(Phases 0–5) are in git history and `.superpowers/sdd/`.
+
+**Next phase (NOT started): Linux port + upload to GitHub.** The repo is
+local-only — `git remote -v` is empty; `v1.0.0` is tagged at `a5bede4`
+but has never been pushed. The Linux port will need the Windows-only
+surface (`winit_hook`, `winapi.rs`, EcoQoS/trim, `Global\` mutex,
+named pipe, `RegisterHotKey`, cpal/WASAPI specifics) behind `cfg` gates —
+`cfg(not(windows))` dead-code lints are already an accepted open item
+(see below).
 
 ## State at Phase 6 (measurement complete → v1.0.0)
 
-- **Phase 6 final measurement is complete** — all nine budgets fresh on the
-  final build, `BENCH.md` "Phase 6 final table — v1.0.0 (2026-10-05)",
-  evidence in `.superpowers/sdd/2026-10-05-phase6-final-measurement/`.
+- **Phase 6 is fully closed** — all 20 tasks done, whole-branch review
+  APPROVE-WITH-FIXES (0 must-fix) + M1–M5 fix dispatch + re-review
+  APPROVE, `Cargo.toml` `1.0.0`, **tagged `v1.0.0` = `a5bede4`**, tree
+  clean. Evidence: `.superpowers/sdd/2026-10-05-phase6-final-measurement/`
+  (`progress.md` ledger, `review-final.md`, task reports — all gitignored
+  per ruling R2).
+- **All nine budgets fresh in `BENCH.md` "Phase 6 final table —
+  v1.0.0 (2026-10-05/06)"** — every row traced to a task report by the
+  Task 18 review (7/7 APPROVE).
 - **Budget 5 is settled (do not relitigate): permanent UNSTABLE ruling** —
   0.62% median (5 × 300 s, P-core pinned, `bench.py --affinity/--repeat`),
   attributed to scheduler/heterogeneous-core variance, **not carried to
   1.1**. This closes lesson 9's "robustification is a future task" — the
   harness fix is done and the ruling is recorded in BENCH.md.
 - **Budget 8: AT CAP (12/12, zero headroom)** — never write it as a bare
-  PASS; any new thread is a budget failure (§18.2).
+  PASS; any new thread is a budget failure (§18.2). Task 17 re-confirmed:
+  spawn set byte-identical to `40b0719`.
 - **§7.6 was implemented in Phase 6** (the phase's only src change): commit
   `18aaf39`, Coarse fallback for relative seeks after a >300 ms seek,
   3 unit tests → `cargo test` **34**, size unchanged **10,452,992 B**,
   warnings **7**; §16.5 warm-up stalls 4 → 0. Every Lane B number is
   post-fix.
-- Remaining Close steps (controller): whole-branch review, `Cargo.toml`
-  version → `1.0.0` + `git tag v1.0.0`.
 - Outstanding for the user: the **human listening checklist**
-  (`BENCH.md`, "Human listening checklist (Phase 6 close)").
+  (`BENCH.md`, "Human listening checklist (Phase 6 close)") — the only
+  gate no script can run.
+
+## Phase 6 session: what was done
+
+1. **20 tasks, two lanes, all on `master`, 11 commits
+   (`19d4fc6` → `a5bede4`), every task reviewed** (6 APPROVE + 2 parked
+   minors in Lane A; every Lane B re-run APPROVE; Task 18 APPROVE 7/7;
+   Task 19 APPROVE-WITH-FIXES → fix → APPROVE).
+2. **Lane A (tasks 1–10, parallel):** acceptance tests §16.1–16.9
+   (30-file order, m4a siblings, corrupt-file skip, unicode paths, 500-file
+   open 63.5 ms, corrupt message, ASCII+unicode 7/7) → all PASS;
+   security audit → BENCH baseline ("zero network surface in 1.0" with the
+   `webbrowser` transitive-crate caveat stated, not buried); doc sweeps of
+   IMPLEMENTATION / USER_GUIDE / BENCH (37 citation fixes); rule 10 +
+   gate 4 audit PASS. Controller committed doc waves (R3/R4).
+3. **Lane B (tasks 11–17, strictly serial — one exclusive subagent at a
+   time, `Get-Process qpid` empty before each):** build + full budget
+   sweep (all PASS), budget 5 harness (`--affinity` P-core pin +
+   `--repeat` median-of-5 → permanent ruling), timing tests (§16.3/16.4),
+   3-hour seek soak (§16.5), device change (§16.10), 30-min minimized 2×
+   debug soak (§16.11), thread re-confirm (§budget 8).
+4. **§7.6 fix — the phase's one src change:** the 3-hour seek run's
+   warm-up fired the spec's timing condition (4 stalls >300 ms, max
+   1.220 s). Root cause: `decode.rs` only had the *error*-based Coarse
+   fallback; the spec's *timing* rule ("seek >300 ms → Coarse for
+   relative seeks") was never implemented, and `seek_to()` erased the
+   relative/absolute distinction. TDD red→green: `SeekPolicy`
+   (mode_for/note_cost, sticky), `seek(target, relative)`, flag threaded
+   through 12 call sites. Gates unchanged (34 tests, 7 warnings, size
+   identical). **Re-run chain:** tasks 11/12/13/14 all re-measured on the
+   new exe; stalls 4 → 0, budget 5 numbers refreshed (0.80 → 0.62).
+5. **Close (tasks 18–20):** final nine-budget table + §16 probe rows +
+   human listening checklist in BENCH.md; IMPLEMENTATION/handoff refresh;
+   whole-branch review over `9207694..3c7d652` (every number
+   spot-checked, all 12 call sites re-verified, `cargo test` run at HEAD);
+   M1–M5 minors fixed in one dispatch + scoped re-review; version `1.0.0`
+   + annotated tag `v1.0.0`.
+6. **Ledger rulings (R1–R5):** R1 = every subagent must keep its todo
+   list updated (user order); R2 = `.superpowers/sdd/**` gitignored
+   (reports are workspace artifacts — the plan's "committed" wording was
+   itself fixed as M5); R3 = Lane A parallel sanctioned, controller
+   commits; R4 = subagents edit only, never commit; R5 = Lane B strictly
+   serial exclusive.
+
+## Phase 6 main struggles and how they were fixed
+
+1. **Spec rule implemented in tests but not in code (§7.6).** The
+   acceptance run *caught* a spec-vs-implementation gap that 5 prior
+   phases missed: the >300 ms timing fallback existed only as prose.
+   Fix pattern that worked: systematic-debugging root cause → TDD
+   (RED test for the missing `SeekPolicy`) → implement → **re-run every
+   measurement task whose number could have been tainted** (11–14).
+   Lesson: an acceptance soak that fires a never-implemented rule is a
+   *find*, not a flaky harness — check the spec text before blaming the
+   probe.
+2. **Budget 5 kept failing across heterogeneous P/E cores.** 0.59% →
+   0.69% → 0.80%, machine-dependent, not reproducible run-to-run.
+   Fix: `bench.py --affinity` (pin to P-cores; detection probe showed
+   0.69 vs 0.87 unpinned) + `--repeat 5` median-of-5 → 0.62%. When still
+   >0.5%: the plan's sanctioned fallback — permanent **UNSTABLE ruling**
+   in BENCH with all four required citations, explicitly "not carried to
+   1.1". Never re-run it into the ground.
+3. **Task 15's own probe asserted the wrong bound.** Run 1 "failed" on
+   symmetric ±1500 ms across a *deliberately accepted* ≤2 s
+   device-detection wake (observed +1972 ms). The spec (§16.10) only
+   says "pauses without a crash", and the Phase 5 fold bound is
+   *asymmetric* (resume must not lose position). Fix: controller ruling —
+   corrected asserts (Paused+Message 3/3, fold ±1500, detection latency
+   ≤2000 recorded separately) → re-run 3/3 PASS. Lesson: before fixing
+   product code on a probe FAIL, re-read the spec sentence the probe is
+   supposed to encode.
+4. **Measurement hygiene kept the numbers trustworthy:** per-second bench
+   logs redirected to files (never controller context) + generous bash
+   timeouts; no `Start-Sleep 500ms` (PS 5.1); Python subprocess with
+   list args; `done.marker` detached launches; kill only paths ending
+   `target\...\qpid.exe`; `Get-Process qpid` empty before every task.
+5. **Doc drift found at the last gate, not before.** Task 19 found the
+   canonical top budget table still showing Phase 4/5 numbers with no
+   pointer to the Phase 6 final table (M1), a causal "4 → 0" claim the
+   task-14 report itself hedged (M2 — the trigger never fired on the
+   re-run; unit tests cover the branch), mixed 10-05/10-06 dates (M3),
+   two `bench.py` harness traps (M4: pin status not shown in repeat
+   summary, zero-sample run counted as 0.0%), and the plan's own stale
+   R2/test-count wording (M5). All fixed in **one** dispatch + scoped
+   re-review — findings went to a single fix batch, not N micro-rounds.
+6. **Parked is a real state.** 5 items parked with adjudications
+   (3 PARK-FOREVER, 1 folded into M2, 1 absorbed) instead of being
+   re-litigated at close. The ledger `progress.md` is authoritative —
+   trust it over task-report prose.
+
 
 ## What the project is
 
@@ -37,7 +140,7 @@ skips, five playback speeds (WSOLA), session restore, autosave
 checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 ≤ 2 background wakeups/s), plus a `--cli` headless mode for tests/benches.
 
-## What was done this session (Phase 5: Windows integration)
+## Previous session (Phase 5: Windows integration)
 
 1. **6 tasks + whole-branch review on `master`, clean tree, 11 commits:**
    `dbf8f1e` plan → `207f378` T1 → `3b53215` T3 → `ba025bc` T2 →
@@ -181,9 +284,12 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 # threads: 11 idle / 12 playing — ≤ 12, AT CAP; any new thread = budget failure
 ```
 
-State at handoff: `master`, Phase 6 measurement complete, tree clean before
-this doc edit (controller commits Task 18's three docs, then review + version
-bump + tag). Gates: `cargo test` **34 passed** (31 + 3 from the §7.6 fix),
-release warnings **7**, exe **10,452,992 B** (cap 10,485,760, margin 32,768),
-all §15.6 gates PASS (5 human gates 2026-10-05), all nine Phase 6 budgets
-recorded in BENCH.md (5 = permanent ruling, 8 = AT CAP).
+State at handoff: `master`, **Phase 6 CLOSED**, tagged **`v1.0.0` =
+`a5bede4`**, tree clean, no git remote (never pushed). Gates:
+`cargo test` **34 passed** (31 + 3 from the §7.6 fix), release warnings
+**7**, exe **10,452,992 B** (cap 10,485,760, margin 32,768), rule 10 =
+13/12+1 (`main.rs:147`), gate 4 isolated, all §15.6 gates PASS (5 human
+gates 2026-10-05), all nine Phase 6 budgets recorded in BENCH.md (5 =
+permanent UNSTABLE ruling, 8 = AT CAP). Next phase: Linux port + GitHub
+upload — start a new session/plan for it; begin with `cfg` audit of the
+Windows-only surface and `gh`/remote setup.
