@@ -3,7 +3,7 @@
 //! missing, corrupt or wrong-version file loads as defaults.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const RESUME_REWIND_MS: u64 = 0; // section 9 rule 8, applied on restore
@@ -38,6 +38,11 @@ impl Default for Store {
 }
 
 /// Lowercase + strip the Windows long-path prefix (section 9 rule 1).
+/// Ruling (linux-port.md section 6): lowercasing is UNCONDITIONAL, on
+/// Linux too — one shared code path and schema. Documented risk: two
+/// files in one folder whose names differ only by case would collide
+/// (rare on Linux, impossible on Windows). The `\\?\` strip is a no-op
+/// on Unix paths (they never carry it).
 pub fn key(s: &str) -> String {
     let s = s.strip_prefix(r"\\?\").unwrap_or(s);
     s.to_lowercase()
@@ -52,15 +57,8 @@ pub fn milli_to_speed(m: u32) -> f64 {
     m as f64 / 1000.0
 }
 
-/// `%LOCALAPPDATA%/qpid/state.json`; None when LOCALAPPDATA is unset
-/// (persistence silently disabled, never crash).
-pub fn state_path() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(PathBuf::from(base).join("qpid").join("state.json"))
-}
-
 pub fn load() -> Store {
-    match state_path() {
+    match crate::platform::state_path() {
         Some(p) => load_from(&p),
         None => Store::default(),
     }
@@ -86,7 +84,7 @@ fn now_unix() -> u64 {
 
 impl Store {
     pub fn save(&mut self) {
-        match state_path() {
+        match crate::platform::state_path() {
             Some(p) => self.save_to(&p),
             None => {}
         }
@@ -158,7 +156,7 @@ impl Store {
 mod tests {
     use super::*;
 
-    fn tmp_path(tag: &str) -> PathBuf {
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("qpid_store_test_{tag}_{}.json", std::process::id()))
     }
 
@@ -196,6 +194,12 @@ mod tests {
         assert_eq!(speed_to_milli(1.25), 1250);
         assert_eq!(speed_to_milli(f64::NAN), 1000);
         assert!((milli_to_speed(1500) - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn key_unix_paths_are_only_lowercased() {
+        assert_eq!(key("/home/User/Books/Ch1.mp3"), "/home/user/books/ch1.mp3");
+        assert_eq!(key(r"\\?\C:\A"), key("c:\\a")); // strip still works
     }
 
     #[test]

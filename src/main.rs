@@ -168,21 +168,13 @@ fn run_ui(initial_path: Option<String>) {
     let (cmd_tx, evt_rx, shared, engine) = spawn_engine();
     platform::start_media_keys(cmd_tx.clone());
 
-    // The first instance's reader: decode UTF-16 payload -> OpenPath,
-    // empty payload = raise only. Always raise the window (rule 4).
+    // The first instance's reader: decoded path -> OpenPath, None =
+    // raise only. Always raise the window (rule 4).
     {
         let cmd_tx = cmd_tx.clone();
-        platform::start_instance_listener(move |buf| {
-            if buf.len() >= 2 && buf.len() % 2 == 0 {
-                let units: Vec<u16> = buf
-                    .chunks_exact(2)
-                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
-                    .collect();
-                if let Ok(s) = String::from_utf16(&units) {
-                    if !s.is_empty() {
-                        let _ = cmd_tx.send(Command::OpenPath(PathBuf::from(s)));
-                    }
-                }
+        platform::start_instance_listener(move |path| {
+            if let Some(s) = path {
+                let _ = cmd_tx.send(Command::OpenPath(PathBuf::from(s)));
             }
             platform::raise_window();
         });

@@ -48,6 +48,19 @@ pub fn trim_working_set() {
     }
 }
 
+/// `%LOCALAPPDATA%\qpid\state.json`; None when LOCALAPPDATA is unset
+/// (persistence silently disabled, never crash).
+pub fn state_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    Some(std::path::PathBuf::from(base).join("qpid").join("state.json"))
+}
+
+/// Windows hidden/system file attributes (architecture.md 12.6).
+pub fn hidden_flags(path: &std::path::Path) -> u32 {
+    use std::os::windows::fs::MetadataExt;
+    path.metadata().map(|m| m.file_attributes()).unwrap_or(0)
+}
+
 pub fn lower_thread_priority() {
     use windows::Win32::System::Threading::{
         GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
@@ -122,8 +135,9 @@ pub fn send_to_first_instance(path: Option<&std::path::Path>) {
 /// Section 12.5 rule 4 / section 5: the first instance's reader. One
 /// sanctioned extra thread (name it for thread-count diagnostics),
 /// blocked on ConnectNamedPipe — costs nothing while idle. The payload
-/// bytes (UTF-16 path, or empty = raise only) go to `on_path`.
-pub fn start_instance_listener(on_path: impl Fn(Vec<u8>) + Send + 'static) {
+/// bytes (UTF-16 path, or empty = raise only) are decoded here and the
+/// resulting path goes to `on_path` (None = raise only).
+pub fn start_instance_listener(on_path: impl Fn(Option<String>) + Send + 'static) {
     {
         use std::io::Read;
         use std::os::windows::io::FromRawHandle;
@@ -165,7 +179,16 @@ pub fn start_instance_listener(on_path: impl Fn(Vec<u8>) + Send + 'static) {
                     ));
                     let mut buf = Vec::new();
                     let _ = (&*file).read_to_end(&mut buf);
-                    on_path(buf);
+                    let path = if buf.len() >= 2 && buf.len() % 2 == 0 {
+                        let units: Vec<u16> = buf
+                            .chunks_exact(2)
+                            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                            .collect();
+                        String::from_utf16(&units).ok().filter(|s| !s.is_empty())
+                    } else {
+                        None // empty payload = "just raise the window"
+                    };
+                    on_path(path);
                     let _ = DisconnectNamedPipe(h);
                 }
             });

@@ -21,7 +21,6 @@ pub fn is_playable(name: &str, attributes: u32) -> bool {
 /// All playable files in `dir` (no recursion, section 17), natural
 /// sorted by file name so "2.mp3" precedes "10.mp3".
 pub fn scan(dir: &Path) -> Vec<PathBuf> {
-    use std::os::windows::fs::MetadataExt;
     let mut out: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(rd) => rd
             .filter_map(|e| e.ok())
@@ -29,8 +28,7 @@ pub fn scan(dir: &Path) -> Vec<PathBuf> {
             .filter(|p| {
                 if !p.is_file() { return false; }
                 let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let attrs = p.metadata().map(|m| m.file_attributes()).unwrap_or(0);
-                is_playable(name, attrs)
+                is_playable(name, crate::platform::hidden_flags(p))
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -46,6 +44,7 @@ pub fn scan(dir: &Path) -> Vec<PathBuf> {
 
 pub fn index_of(files: &[PathBuf], path: &Path) -> Option<usize> {
     // CLI opens may use '/' while scan results use '\': normalize both sides.
+    // Lowercase on all platforms too (linux-port.md section 6 ruling — same direction as store::key).
     let target = path.to_string_lossy().to_lowercase().replace('/', "\\");
     files.iter()
         .position(|p| p.to_string_lossy().to_lowercase().replace('/', "\\") == target)
