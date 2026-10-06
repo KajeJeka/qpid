@@ -1,6 +1,6 @@
 # Q-pid — user guide
 
-Q-pid is a small Windows audio player: a folder/file playlist player with a
+Q-pid is a small Windows/Linux audio player: a folder/file playlist player with a
 seek bar, ±15 s skips, five playback speeds, and a session that remembers
 where you stopped. This guide covers everything a user can do — in the app
 and in the CLI — with the source line behind each behavior.
@@ -11,17 +11,17 @@ and in the CLI — with the source line behind each behavior.
 
 | Launch | Behavior |
 |---|---|
-| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:196-199`, `src/engine/mod.rs:797-856`). Nothing in history → empty window. |
-| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:194-195`, autoplay at `src/engine/mod.rs:756-764`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:143`). |
+| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:188-191`, `src/engine/mod.rs:797-856`). Nothing in history → empty window. |
+| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:186-187`, autoplay at `src/engine/mod.rs:756-764`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:141`). |
 | `qpid.exe --cli <file-or-folder>` | Headless mode: no window, everything driven from the keyboard stdin (see §6). Meant for testing/benchmarks (`src/main.rs:29-33`). |
 
 On every exit — close button, `q`, or stdin end — the current position is
-saved before the process dies (`src/main.rs:156-157` CLI, `src/main.rs:204-205`
+saved before the process dies (`src/main.rs:156-157` CLI, `src/main.rs:196-197`
 UI, `src/engine/mod.rs:459-466`).
 
 **One copy at a time:** *Opening a second copy hands the file to the
 running window* — q-pid holds a machine-wide lock (`Global\qpid-instance`,
-`src/winapi.rs:87`), so the second copy never opens its own window: it
+`src/platform/windows.rs:87`), so the second copy never opens its own window: it
 sends the path over a named pipe (or just asks the first copy to come to
 the front) and exits in a few milliseconds (`src/main.rs:163-166`).
 **`--cli` runs are exempt** — they never claim the instance, so a CLI
@@ -139,9 +139,10 @@ Deliberate non-actions:
 
 ### Media keys
 
-**Media keys: play/pause, next, previous** work while Q-pid runs — even
+**Media keys: play/pause, next, previous** work while Q-pid runs on
+Windows — even
 when the window is minimized or unfocused (`RegisterHotKey` on a
-message-only window, `src/winapi.rs:249-327`). They trigger the same actions
+message-only window, `src/platform/windows.rs:248-326`). They trigger the same actions
 as the transport buttons; if your keyboard/headset has those keys, they
 work system-wide while q-pid is open.
 
@@ -171,7 +172,8 @@ can't expose drag state:
 ## 5. Behaviors you'll notice over time
 
 - **Pause longer than 10 s** → Q-pid releases the audio stream, decoder and
-  resampler to save resources (**0 % CPU** while parked, `BENCH.md:130-136`).
+  resampler to save resources (**0 % CPU** while parked, BENCH.md,
+  "paused-over-10s").
   Pressing Play reopens the file **at the exact position you paused**
   (`src/engine/mod.rs:1248-1253`). Seeking while paused just moves the saved
   resume position.
@@ -188,7 +190,7 @@ can't expose drag state:
   restoring the window resumes updates. Same freeze while paused.
 - **Session restore detail**: if the file changed size since the save
   (e.g. re-downloaded), the saved position is discarded and you start at 0
-  (`src/store.rs:139-146`).
+  (`src/store.rs:137-144`).
 - Unreadable files are skipped with a status message; if nothing playable
   remains you get **"No playable files left"** (`src/engine/mod.rs:1111-1133`).
 
@@ -227,3 +229,39 @@ the app does (`src/main.rs:75-82`).
 4. **No seek into the final second** (clamp at duration − 1 s).
 5. **Light/dark theme switch** not available yet (dark only).
 6. `Shift+N` triggers Next (case-insensitive key match).
+
+---
+
+## 8. Linux
+
+Q-pid builds and runs on Linux; the packages ship with the first Linux
+release (the `v1.0.0` tag predates the port and carries no Linux assets).
+
+### Install
+
+| Format | How |
+|---|---|
+| AppImage | `chmod +x qpid-<tag>-x86_64.AppImage` (or `-aarch64`), then `./qpid-<tag>-x86_64.AppImage` |
+| Flatpak | `flatpak install --user qpid-<tag>.flatpak` — a self-hosted bundle from the release page, **not** Flathub |
+| AUR | download the release's `aur` artifact, then `makepkg -si` (full procedure: `packaging/aur/README.md`) |
+
+### First-release limitations
+
+1. **Single instance does not coordinate across formats.** The lock is a
+   Unix socket in `$XDG_RUNTIME_DIR`: an AppImage copy and an AUR copy
+   share that path and coordinate as one instance, while a Flatpak copy
+   runs sandboxed with its own restricted view of the runtime dir, so it
+   runs as its own instance.
+2. **Window raise on Wayland is best-effort.** Compositors refuse
+   force-focus by design; the second instance still delivers the path
+   (`OpenPath` reaches the first copy), the window just may not come to
+   the front.
+3. **Flatpak session-restore needs the file inside `$HOME`.** The bundle
+   is granted `--filesystem=home:ro`; audio elsewhere on disk is invisible
+   to the sandbox, so it cannot be reopened after a restart.
+4. **Media keys / MPRIS are not supported on Linux yet** (MPRIS over
+   D-Bus is a future phase). Keyboard shortcuts work exactly as in §3.
+5. **State lives at `~/.local/state/qpid/state.json`** (`$XDG_STATE_HOME`
+   when set), not `%LOCALAPPDATA%`. Name keys are lowercased
+   unconditionally on Linux too — two files whose names differ only by
+   case share a state entry (rare on case-sensitive filesystems).

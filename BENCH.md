@@ -86,6 +86,16 @@ minimize the window" warning is expected for this mode, as in the Phase 2
 runs) and the store's saved position advanced the file from track 3 to 4
 mid-run.
 
+## Linux budgets — NOT YET MEASURED
+
+**No Linux number exists.** Every budget in this file was measured on
+Windows 11 x64 and must not be inherited by the Linux build — the Linux
+binary, its threads and its size are reported (CI prints the release
+size) but budgeted nowhere (linux-port.md §15). A Linux number may only
+be recorded after `tools/bench.py` actually runs on Linux: an X11 session
+with `xdotool` installed (Wayland cannot be minimized by the harness —
+documented gap), on the physical Linux machine, as Phase 10.
+
 ## Scenarios
 
 Sections below are the historical measurements as originally recorded

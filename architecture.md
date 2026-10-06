@@ -1,6 +1,6 @@
-# hush: Architecture
+# q-pid: Architecture
 
-Working name: `hush`. Rename freely.
+Project name: q-pid (renamed before v1.0.0; every shipped artifact uses q-pid).
 
 This document is a set of orders for a coding agent. Follow it in sequence. When a rule and a convenience conflict, the rule wins. When a crate name, feature name or API in this document does not match the current docs on docs.rs, trust the docs and keep the intent.
 
@@ -346,7 +346,8 @@ q-pid/
   src/engine/output.rs   cpal stream, callback, ring, gain ramp
   src/playlist.rs        folder scan, filter, natural sort
   src/store.rs           JSON state, atomic save, pruning
-  src/winapi.rs          EcoQoS, working set trim, thread priority, single instance
+  src/platform/          OS boundary: windows.rs / linux.rs behind cfg
+                         (EcoQoS, trim, thread priority, single instance, state path)
   tools/gen_test_audio.py
   tools/bench.py
 ```
@@ -405,7 +406,7 @@ Do not start a phase before the previous exit criteria pass.
 ### Phase 1: Headless engine
 
 1. Engine thread, `Shared`, ring, cpal callback, symphonia decode, stereo convert.
-2. A temporary CLI: `hush.exe <file>` plays it. Keys on stdin for pause and seek.
+2. A temporary CLI: `qpid.exe <file>` plays it. Keys on stdin for pause and seek.
 3. Implement the flush protocol, gain ramp, pause with stream stop, and the 10 s release.
 4. Exit: all formats play. Seek and pause produce no clicks. Position formula is correct at 1x. CPU at 1x within budget 5.
 

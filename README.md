@@ -1,22 +1,36 @@
 # q-pid
 
-A small folder-based audio player for Windows, written in Rust with a Slint UI. Point it at a folder or a file, and it plays the folder as a naturally sorted playlist: seek bar, skip buttons, five playback speeds that keep pitch, session restore, and media-key support. A headless `--cli` mode runs the same engine without a window.
+A small folder-based audio player for Windows and Linux, written in Rust with a Slint UI. Point it at a folder or a file, and it plays the folder as a naturally sorted playlist: seek bar, skip buttons, five playback speeds that keep pitch, session restore, and media-key support (Windows). A headless `--cli` mode runs the same engine without a window.
 
-It is built to strict resource limits: the executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [BENCH.md](BENCH.md); the normative design lives in [architecture.md](architecture.md).
+It is built to strict resource limits: the Windows executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [BENCH.md](BENCH.md); the normative design lives in [architecture.md](architecture.md).
 
 ## Download
 
 Grab [`qpid-v1.0.0.exe`](https://github.com/KajeJeka/qpid/releases/download/v1.0.0/qpid-v1.0.0.exe) from the [releases page](https://github.com/KajeJeka/qpid/releases). It is a single portable executable: no installer, no dependencies. Put it anywhere and run it.
 
+Linux packages — **links after the first Linux release** (the `v1.0.0` tag
+predates the port, so it carries no Linux assets; the AUR in particular
+must be first published against a tag that ships the packaging files):
+
+- **AppImage** — `qpid-<tag>-x86_64.AppImage` / `qpid-<tag>-aarch64.AppImage`: `chmod +x`, run.
+- **Flatpak** — `qpid-<tag>.flatpak`, a self-hosted bundle on the release page (not Flathub): `flatpak install --user qpid-<tag>.flatpak`.
+- **AUR** — the release's `aur` artifact holds a rendered `PKGBUILD` (real checksum) and its README; publish procedure in [packaging/aur/README.md](packaging/aur/README.md).
+
 ## Building and running
 
 ```powershell
 cargo build --release        # target\release\qpid.exe (<= 10 MB by design)
-cargo test                   # 34 tests
+cargo test                   # 35 tests (38 on Linux: +3 platform::linux)
 target\release\qpid.exe                      # restore last session, paused
 target\release\qpid.exe <folder-or-file>     # open and play immediately
 target\release\qpid.exe --cli [file]         # headless mode, stdin controls
 ```
+
+On Linux the build needs `libasound2-dev libfontconfig1-dev pkg-config`
+(ALSA for cpal, fontconfig for fontique/fontdb), then
+`cargo build --release` produces `target/release/qpid`. The release
+workflow builds three package formats from `packaging/`: AppImage
+(x86_64 + aarch64), Flatpak bundle, and a rendered AUR `PKGBUILD`.
 
 Release settings favor size over speed (`opt-level = "s"`, fat LTO, LTO'd dependencies, symbols stripped): decode and resample do not come close to saturating one core at 1x, and the 10 MB budget binds harder than dependency speed. The UI uses Slint's software renderer, so there is no GPU or driver dependency.
 
@@ -33,7 +47,7 @@ Supported formats: mp3, m4a, m4b, aac, flac, ogg, wav (via symphonia).
 
 `run_ui` does four things before showing a window:
 
-1. **Single instance.** `winapi::claim_instance()` takes the `Global\qpid-instance` mutex. If another instance already holds it, this process sends its file argument to the first instance over the `\\.\pipe\qpid-open` named pipe and exits. The first instance decodes the payload, opens the path, and raises its window. One player per machine.
+1. **Single instance.** `platform::claim_instance()` takes the `Global\qpid-instance` mutex (Windows) or the `$XDG_RUNTIME_DIR/qpid.sock` Unix socket (Linux). If another instance already holds it, this process sends its file argument to the first instance over the `\\.\pipe\qpid-open` named pipe (Windows) or the socket (Linux) and exits. The first instance decodes the payload, opens the path, and raises its window. One player per machine.
 2. **Installs the winit hook** (`src/winit_hook.rs`), the only module allowed to touch Slint's unstable winit API. It observes window visibility and file drops, forwards both to sinks that `ui.rs` registers, and passes every other winit event to Slint unchanged.
 3. **Spawns the engine** (see below) and the Windows extras: a media-key listener (`RegisterHotKey` for play/pause, next, previous) and the pipe listener from step 1.
 4. **Creates the Slint window** (`ui/main.slint` compiled by `slint-build` in `build.rs`), wires it with `ui::wire()`, then sends either `OpenPath` (argument given) or `RestoreSession` (no argument).
@@ -124,7 +138,7 @@ If cpal reports a device error (unplug, sleep), the engine pauses the same way a
 
 ### 9. Persistence (`src/store.rs`)
 
-State lives in `%LOCALAPPDATA%\qpid\state.json`: last folder, last file, per-file position and size, a `done` flag per file, playback speed, and up to 100 folders of history. Loading is forgiving: a missing, corrupt, or wrong-version file loads as defaults, never a crash. Saving goes through one function, `save_now`, called only at well-defined triggers: pause, opening another file, next/prev, speed change, error stops, the 30-second checkpoint while playing, and application exit (including the panic-free paths where the UI channel just closes).
+State lives in `%LOCALAPPDATA%\qpid\state.json` on Windows and `~/.local/state/qpid/state.json` on Linux (`$XDG_STATE_HOME` when set): last folder, last file, per-file position and size, a `done` flag per file, playback speed, and up to 100 folders of history. Loading is forgiving: a missing, corrupt, or wrong-version file loads as defaults, never a crash. Saving goes through one function, `save_now`, called only at well-defined triggers: pause, opening another file, next/prev, speed change, error stops, the 30-second checkpoint while playing, and application exit (including the panic-free paths where the UI channel just closes).
 
 A file position is only trusted if the file size still matches; a restored position rewinds a hair before resume (the constant exists even though it is currently 0).
 
@@ -151,7 +165,7 @@ The nine resource budgets (executable size, launch time, RAM while playing and m
 | `src/store.rs` | `state.json` load/save, pruning, key normalization |
 | `src/ui.rs` | Slint glue: timers, buttons, events, visibility sink |
 | `src/winit_hook.rs` | winit observation: visibility and file drops |
-| `src/winapi.rs` | EcoQoS, working-set trim, single instance, media keys |
+| `src/platform/` | OS boundary: `windows.rs` / `linux.rs` behind `cfg` (single instance, media keys, power/trim, state path) |
 | `ui/main.slint` | the UI layout itself |
 | `tools/bench.py` | budget measurement harness |
 | `tools/gen_test_audio.py` | fixture generator for tests |

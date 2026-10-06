@@ -70,7 +70,7 @@ is the human listening checks, delivered as the Phase 6 close checklist in
   | 3 | Prev | `mod.rs:561` (position > 5 s restart) + `mod.rs:563` (index step) → `mod.rs:1062` inside `advance_to` | `prev restart` / `next/prev` |
   | 4 | Open of another path | `mod.rs:476` (pre-open, old file's position) | `open of another path` |
   | 5 | Speed change | `mod.rs:591` — after `speed_milli` store (`mod.rs:584`), so position and new speed both land | `speed change` |
-  | 6 | Exit | engine: `mod.rs:461` (Shutdown) + `mod.rs:324` (channel dropped); main: `src/main.rs:156-157` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:204-205` (UI: Shutdown then `join()`) | `app exit` |
+  | 6 | Exit | engine: `mod.rs:461` (Shutdown) + `mod.rs:324` (channel dropped); main: `src/main.rs:156-157` (CLI `q`/EOF: Shutdown then `join()`) and `src/main.rs:196-197` (UI: Shutdown then `join()`) | `app exit` |
   | 7 | Error stop (2 sites) | `mod.rs:788` (file-open failure) + `mod.rs:1124` (`advance_to` no-playable-file arm) | `error stop` |
   | 8 | 30 s while playing | `mod.rs:357` (checkpoint in the wake path, only when position changed) | `30s checkpoint` |
 - Phase 4 (UI): **build-verified**. The 500 ms position timer runs only
@@ -96,7 +96,7 @@ is the human listening checks, delivered as the Phase 6 close checklist in
   media keys, visual window raise — reported passing by the user, recorded
   in the BENCH.md §15.6 exit-criteria table; the sixth row there,
   second-launch handoff, is automated PASS).
-  - *EcoQoS + trim* (`src/winapi.rs`: `set_ecoqos` via
+  - *EcoQoS + trim* (now `src/platform/windows.rs`: `set_ecoqos` via
     `SetProcessInformation`/`ProcessPowerThrottling`, `trim_working_set`
     via `SetProcessWorkingSetSize`) are driven from the existing
     visibility sink (`src/ui.rs:320-322`): `set_ecoqos(!visible)` on every
@@ -106,7 +106,8 @@ is the human listening checks, delivered as the Phase 6 close checklist in
     and the visibility event already fires on exactly the transitions that
     matter — so the wiring is inline on the event-loop thread, nothing
     polls, and there is no wake when hidden beyond the engine's own.
-    `lower_thread_priority` moved into `winapi.rs` (same behavior).
+    `lower_thread_priority` moved into the platform file (same behavior;
+    now `src/platform/windows.rs`).
     Soak: **129.6 min minimized playing** (debug, trim armed),
     `underruns=0` on all 581 wake-log lines, `[eco] EcoQoS on` after
     `visible=false` (BENCH.md "Phase 5 probes"). Budget 4: **4.97 MB**
@@ -143,18 +144,18 @@ is the human listening checks, delivered as the Phase 6 close checklist in
     `winit_030` only in `src/winit_hook.rs`. End-to-end drop was
     human-confirmed 2026-10-05; prior verification was compile-level only.
   - *Single instance* (§12.5 rule 4): `claim_instance()`
-    (`src/winapi.rs:78`) creates `Global\qpid-instance` and tests
+    (`src/platform/windows.rs:79`) creates `Global\qpid-instance` and tests
     `ERROR_ALREADY_EXISTS`; it is the **first statement of `run_ui`**
     (`src/main.rs:163`), i.e. before the winit hook and the engine — a
     second instance creates no window, no engine thread and never writes a
     state file (its path is only serialized into the payload). On loss it
     writes UTF-16 (empty = raise-only) to the machine-global
     `\\.\pipe\qpid-open` with 10 × 50 ms retries (`send_to_first_instance`,
-    `src/winapi.rs:115`) and returns. The first instance runs the
+    `src/platform/windows.rs:111`) and returns. The first instance runs the
     **sanctioned 4th thread** (`qpid-pipe`, `thread::Builder`) looping
     `ConnectNamedPipe` →
     `OpenPath`/raise → `DisconnectNamedPipe` (`start_instance_listener`,
-    `src/winapi.rs:146`), then `raise_window()` (`src/winapi.rs:202`:
+    `src/platform/windows.rs:140`), then `raise_window()` (`src/platform/windows.rs:202`:
     `EnumWindows` on own PID,
     `SW_RESTORE` + `SetForegroundWindow` — best-effort, the foreground lock
     can refuse). `--cli` is exempt. Probe: **inst2 exit 51 ms**,
@@ -165,11 +166,11 @@ is the human listening checks, delivered as the Phase 6 close checklist in
   - *Media keys* (§12.5 rule 5, optional): `RegisterHotKey` for
     `VK_MEDIA_PLAY_PAUSE` / `NEXT_TRACK` / `PREV_TRACK` (ids 1–3) on a
     message-only window `qpid-media-keys` created on the main thread
-    (`src/winapi.rs:289`), `WM_HOTKEY` → the existing
+    (`src/platform/windows.rs:285`), `WM_HOTKEY` → the existing
     `TogglePlay`/`Next`/`Prev` commands; started after `spawn_engine`
-    (`main.rs:169`), `stop_media_keys()` (`winapi.rs:335`) after
+    (`main.rs:169`), `stop_media_keys()` (`src/platform/windows.rs:331`) after
     `window.run()` unregisters all three and destroys the window
-    (`main.rs:202`). Every failure path returns silently (the feature is
+    (`main.rs:194`). Every failure path returns silently (the feature is
     optional); no new thread, no timer. Size: **+512 B** including the
     `Win32_UI_Input_KeyboardAndMouse` feature (10,451,456 → 10,451,968 B
     at Task 5's build, ≤ 10,485,760 PASS). Probe: window
@@ -200,6 +201,55 @@ is the human listening checks, delivered as the Phase 6 close checklist in
   `cargo test` 31 → 34; warm-up stalls >300 ms 4 → 0); every Lane B number
   above is from the post-fix build, size unchanged 10,452,992 B, warnings 7.
   Outstanding: the human listening checklist (BENCH.md, "Phase 6 close").
+- Phase 7 (platform abstraction): **done** (`6382c1b`). `src/winapi.rs`
+  moved to `src/platform/windows.rs`; `src/platform/mod.rs` re-exports a
+  single `crate::platform` path per OS behind `#[cfg]` (no trait, no dyn —
+  one small binary). `set_ecoqos` renamed `set_background_power_mode`
+  (neutral naming); `winresource` target-gated so it never enters the
+  Linux dependency graph (verified with `cargo metadata
+  --filter-platform`, ruling R-L5 — the literal `cargo tree` still shows
+  host-side build-dep chains on Windows, and the Linux CI job is the
+  real gate).
+- Phase 8/9 (Linux compile via CI + Linux implementation): **done**.
+  `ci.yml`'s `linux` job (`671686e`) needs
+  `libasound2-dev libfontconfig1-dev pkg-config` (fontique/fontdb link
+  fontconfig — run 1 failed exactly there, fixed in `5540e10`) and runs
+  `cargo test` + a release build that **reports** size, never gates it
+  (linux-port.md §15). `src/platform/linux.rs` (`9d4a77b`): XDG state
+  path `~/.local/state/qpid/state.json` (`$XDG_STATE_HOME` when set),
+  single instance over `$XDG_RUNTIME_DIR/qpid.sock`, dotfile
+  `hidden_flags`, and documented no-ops for EcoQoS/trim/thread
+  priority/media keys/window raise (raise is a no-op because Wayland
+  refuses force-focus; `OpenPath` is still delivered). State-key
+  lowercasing is **unconditional on Linux too** — two names differing
+  only by case share an entry (rare on Linux, recorded not "fixed").
+  Test counts: Windows `cargo test` **35**, Linux **38** (35 shared + 3
+  `platform::linux`). CI run 2: Windows GREEN (warning locations ≤ 7,
+  exe ≤ 10,485,760 B) and Linux 37/38 — the one red was the `rule2`
+  fixture's hardcoded `C:\Music\*.mp3` (backslash is not a separator on
+  unix), fixed to native paths in `44048e1`; run 3 is the green-gate run
+  (38/38 expected).
+- Phase 10 (budget measurement on a physical Linux box): **deferred —
+  pending the friend's machine.** `tools/bench.py` gained X11/xdotool
+  minimize support (`2114877`; Wayland stays a documented gap), but no
+  Linux number exists yet — see BENCH.md "Linux budgets — NOT YET
+  MEASURED". Never inherit the Windows numbers.
+- Phase 11 (license, desktop assets, three package formats): **done**
+  (`2114877`, `76110a7`). MIT `LICENSE` + `license = "MIT"` in
+  `Cargo.toml`; `assets/icon.png` (256 px, extracted from
+  `assets/icon.ico` with Pillow); `assets/qpid.desktop`;
+  `packaging/aur` (PKGBUILD template, checksum rendered by CI, artifact
+  name **`aur`**); `packaging/flatpak` (app-id
+  `io.github.KajeJeka.qpid`, self-hosted bundle attached to GitHub
+  Releases, **not Flathub**); `packaging/appimage/build.sh` (linuxdeploy
+  in an `ubuntu:22.04` container, glibc baseline).
+- Phase 12 (CI + release workflows): **done** (`671686e`, `44048e1`).
+  `ci.yml` = windows (test + warning/size gates) · linux (test + build) ·
+  aur (PKGBUILD syntax + ref-aware render validation). `release.yml` =
+  windows, appimage-x86_64, appimage-aarch64, flatpak, aur, and a
+  tag-gated `publish` that attaches all five artifacts; the release
+  notes state Linux sizes are reported per job with no Linux size
+  budget.
 
 ## Unverified — all resolved by the Phases 1–5 builds
 
@@ -280,6 +330,26 @@ no re-verification is needed before 1.0.
   packet skip was landing in Phase 3). Phase 6 ruling (2026-10-05):
   **intentionally not addressed in Phase 6** — no budget fails because of
   it; recorded as a permanent deviation, not fixed.
+
+## Deviations from the Linux port spec (linux-port.md)
+
+- **`src/playlist.rs` scan was Windows-only (port spec §2 wrong).** The
+  folder scan read the hidden bit through
+  `std::os::windows::fs::MetadataExt`, which does not exist on unix —
+  the spec assumed a cross-platform scan. **Fixed:** the check moved
+  behind `platform::hidden_flags(path) -> u32` (`windows.rs` returns the
+  file attributes, `linux.rs` returns the dotfile flag with the same
+  `FILE_ATTRIBUTE_HIDDEN` value), so the shared `is_playable()` predicate
+  in `playlist.rs` is byte-for-byte the same on both platforms.
+- **`assets/icon.png` did not exist (port spec §10 wrong).** The spec
+  listed it as already present. **Fixed** by extracting the 256 px image
+  out of `assets/icon.ico` with Pillow (extraction, not a new
+  commission); `assets/qpid.desktop` and the AUR/Flatpak/AppImage
+  packaging all consume it.
+- **Test fixture, not product code:** `rule2_pick_treats_missing_entries_as_not_done`
+  built keys from hardcoded `C:\Music\*.mp3` strings; converted to native
+  `PathBuf` joins (production `playlist::scan` always yielded native
+  paths — the bug was in the test only). Landed inside `44048e1`.
 
 ## Measurement status
 

@@ -1,22 +1,99 @@
-# handoff.md — q-pid session handoff (Phase 6 CLOSED / v1.0.0 tagged, 2026-10-06)
+# handoff.md — q-pid session handoff (Linux port Phases 7–12 landed, 2026-10-06)
 
 For the next agent working on this repo. Read this first, then
 `architecture.md` (binding), `IMPLEMENTATION.md` (status), `BENCH.md`
 (final table at the end), and `docs/USER_GUIDE.md`. The block below is
-the Phase 6 close record (work + struggles), then the Phase 5 body
-(integration details still accurate). Earlier handoffs and SDD ledgers
-(Phases 0–5) are in git history and `.superpowers/sdd/`.
+the Linux port record (what + deviations + open checklist), then the
+Phase 6 close record, then the Phase 5 body (integration details still
+accurate). Earlier handoffs and SDD ledgers are in git history and
+`.superpowers/sdd/`.
 
-**Next phase (NOT started): Linux port.** The repo is on GitHub
-(`origin` = https://github.com/KajeJeka/qpid, pushed 2026-10-06); the
-`v1.0.0` release is published at
+**Linux port is landed** through packaging + CI/release workflows and
+this docs sweep (Phases 7–12; commits `566a112` → `44048e1`, docs sweep
+uncommitted — R4, controller commits). The repo is on GitHub
+(`origin` = https://github.com/KajeJeka/qpid); `v1.0.0` is published
 https://github.com/KajeJeka/qpid/releases/tag/v1.0.0 with the portable
-exe `qpid-v1.0.0.exe` attached (rebuilt from the tag, 10,452,480 B).
-The Linux port will need the Windows-only
-surface (`winit_hook`, `winapi.rs`, EcoQoS/trim, `Global\` mutex,
-named pipe, `RegisterHotKey`, cpal/WASAPI specifics) behind `cfg` gates —
-`cfg(not(windows))` dead-code lints are already an accepted open item
-(see below).
+exe `qpid-v1.0.0.exe` (rebuilt from the tag, 10,452,480 B) — that tag
+predates the port and carries **no** Linux assets. What remains: Phase
+10 (measure Linux budgets on a physical Linux box) and the friend's
+test checklist below.
+
+## Linux port session (2026-10-06): what was done
+
+Plan: `docs/superpowers/plans/2026-10-06-linux-port.md` (11 tasks);
+authoritative ledger `.superpowers/sdd/2026-10-06-linux-port/progress.md`
+(rulings R-L1–R-L6, CI run history — trust it over task-report prose).
+Commits `566a112` → `44048e1` on `master`, every task reviewed:
+
+1. **Phase 7 — platform abstraction** (`6382c1b`): `src/winapi.rs` →
+   `src/platform/{windows,linux}.rs` behind `cfg` re-exports, so every
+   caller uses one `crate::platform` path; `set_ecoqos` →
+   `set_background_power_mode`; `winresource` target-gated (absent from
+   the Linux graph).
+2. **Phase 9 — `src/platform/linux.rs`** (`9d4a77b`): XDG state path
+   (`~/.local/state/qpid/state.json`), single instance over
+   `$XDG_RUNTIME_DIR/qpid.sock` (no `/tmp` fallback — fail open, every
+   launch is its own instance without the dir), dotfile-based
+   `hidden_flags`, documented no-ops for EcoQoS/trim/thread priority/
+   media keys/window raise (Wayland refuses force-focus; `OpenPath` is
+   still delivered).
+3. **Phase 10 prep** (`2114877`): `tools/bench.py` X11/xdotool minimize
+   (Wayland documented gap). **Phase 10 (budgets) deferred** — needs the
+   physical Linux box.
+4. **Phase 11 — license, assets, three formats** (`2114877`, `76110a7`):
+   MIT `LICENSE` + `license = "MIT"`, `assets/icon.png`,
+   `assets/qpid.desktop`, `packaging/{aur,flatpak,appimage}`.
+5. **Phase 12 — workflows** (`671686e`, `44048e1`): `ci.yml`
+   (windows · linux · aur) and `release.yml` (windows,
+   appimage-x86_64, appimage-aarch64, flatpak, aur, publish on tags;
+   `workflow_dispatch` = dry run, no publish).
+6. **Task 11 — this docs sweep** (README, USER_GUIDE, BENCH,
+   IMPLEMENTATION, architecture name fix; uncommitted per R4).
+
+**CI is the Linux gate** — no Linux machine in this session, so the
+ubuntu job compiles and runs the whole test suite (38: 35 shared + 3
+`platform::linux`) and prints the release size, while the windows job
+keeps the two hard gates (warning locations in src ≤ 7, exe ≤
+10,485,760 B — both green on run 2). Linux CI needs
+`libasound2-dev libfontconfig1-dev pkg-config` (fontique/fontdb link
+fontconfig; that missing dep was run 1's failure, fixed `5540e10`).
+Run 2 showed linux 37/38 — the `rule2` fixture hardcoded
+`C:\Music\*.mp3` (backslash is not a separator on unix), fixed to
+native paths inside `44048e1`; run 3 (`44048e1`) came back all green —
+linux compile + 38 tests + release build, windows test + gates, aur.
+
+**Spec deviations found (all fixed, recorded in IMPLEMENTATION.md):**
+port spec §2 assumed a cross-platform playlist scan, but `playlist.rs`
+used `std::os::windows::fs::MetadataExt` → now `platform::hidden_flags`;
+port spec §10 listed `assets/icon.png` as existing, it did not →
+extracted from `assets/icon.ico` with Pillow (256 px); test-only: the
+`rule2` fixture's hardcoded `C:\` paths → native `PathBuf` joins.
+
+**Standing rulings from this port:** state-key lowercasing is
+unconditional on Linux too (case-only name collisions possible, rare);
+**AUR first publish targets the NEXT tag** — `v1.0.0` ships no packaging
+assets, procedure in `packaging/aur/README.md`, artifact name `aur`;
+Flatpak is a **self-hosted bundle on GitHub Releases**
+(app-id `io.github.KajeJeka.qpid`), **not Flathub**; **Linux sizes are
+reported, never budgeted** (BENCH.md "Linux budgets — NOT YET MEASURED",
+linux-port.md §15).
+
+## Open items — friend's Linux test checklist
+
+- [ ] **AppImage on 2 distros** (x86_64 and, if available, aarch64):
+      `chmod +x` + run, audio out, session restore.
+- [ ] **Flatpak**: sound works (`--socket=pulseaudio`), sandbox quirks
+      (`--filesystem=home:ro` → files outside `$HOME` are invisible, so
+      session restore needs the audio inside `$HOME`), single instance
+      is per-format (no cross-format coordination).
+- [ ] **AUR**: `makepkg -si` from the rendered `aur` artifact
+      (`updpkgsums` unchanged; `.SRCINFO`; push is manual until an AUR
+      account + CI SSH secret exist).
+- [ ] **Phase 10 — full budget suite** on Linux (X11 + `xdotool`
+      installed): first Linux numbers ever; Windows numbers must not be
+      inherited.
+- [ ] **MPRIS / media keys on Linux**: future phase (currently a
+      documented no-op).
 
 ## State at Phase 6 (measurement complete → v1.0.0)
 
@@ -276,7 +353,7 @@ checkpoints, strict resource budgets (exe ≤ 10 MB, minimized CPU/RAM,
 ## Verification commands
 
 ```powershell
-cargo test                                   # expect 34 passed (31 + 3 from the §7.6 fix)
+cargo test                                   # expect 35 passed on Windows (38 on Linux: +3 platform::linux)
 cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 (Get-Item target\release\qpid.exe).Length    # cap 10,485,760; now 10,452,992 (margin 32,768)
 # rule 10 (previous line must show debug_assertions; 13 hits, 12 guarded,
@@ -287,15 +364,15 @@ cargo build --release 2>&1 | Select-String ': warning'  # expect 7 headers
 # threads: 11 idle / 12 playing — ≤ 12, AT CAP; any new thread = budget failure
 ```
 
-State at handoff: `master`, **Phase 6 CLOSED**, tagged **`v1.0.0` =
-`a5bede4`**, pushed to GitHub, release `v1.0.0` published with the exe
-asset, tree clean. Gates:
-`cargo test` **34 passed** (31 + 3 from the §7.6 fix), release warnings
-**7**, release asset **10,452,480 B** (cap 10,485,760; measured gate
-build was 10,452,992 B, delta = version metadata only, see BENCH release
-note), rule 10 =
-13/12+1 (`main.rs:147`), gate 4 isolated, all §15.6 gates PASS (5 human
-gates 2026-10-05), all nine Phase 6 budgets recorded in BENCH.md (5 =
-permanent UNSTABLE ruling, 8 = AT CAP). Next phase: Linux port — start a
-new session/plan for it; begin with a `cfg` audit of the Windows-only
-surface.
+State at handoff: `master` at `44048e1` + the Task 11 docs sweep
+(uncommitted — R4, controller commits), release `v1.0.0` published on
+GitHub with the exe asset. Windows gates: `cargo test` **35 passed**,
+release warnings **7**, release asset **10,452,480 B** (cap 10,485,760;
+gate build 10,452,992 B + version metadata), rule 10 = 13/12+1
+(`main.rs:147`), gate 4 isolated, all §15.6 gates PASS (5 human gates
+2026-10-05), all nine Phase 6 budgets recorded in BENCH.md (5 =
+permanent UNSTABLE ruling, 8 = AT CAP). Linux: compile/test gate green
+in CI (run 2 windows GREEN, linux 37/38 → fixture fix in `44048e1`, run
+3 all green: 38/38 + release build), sizes reported not budgeted. Next: Phase 10 Linux
+budgets + the friend's checklist above; AUR first publish against the
+next tag (not `v1.0.0`).
