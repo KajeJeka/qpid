@@ -6,7 +6,7 @@ invented (linux-port.md §13).
 
 ## Publish procedure (manual)
 
-1. **Get the rendered PKGBUILD** — download the `qpid-AUR` artifact from the
+1. **Get the rendered PKGBUILD** — download the `aur` artifact from the
    release run; it contains this PKGBUILD with the tag's real sha256.
 2. **Sanity-check on an Arch box:**
    - `updpkgsums` — the checksum must come out unchanged (if it changed, the

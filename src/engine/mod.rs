@@ -1293,9 +1293,9 @@ mod tests {
     #[test]
     fn rule2_pick_treats_missing_entries_as_not_done() {
         let pl = vec![
-            PathBuf::from("C:\\Music\\a.mp3"),
-            PathBuf::from("C:\\Music\\b.mp3"),
-            PathBuf::from("C:\\Music\\c.mp3"),
+            PathBuf::from("Music").join("a.mp3"),
+            PathBuf::from("Music").join("b.mp3"),
+            PathBuf::from("Music").join("c.mp3"),
         ];
         let entry = |done: bool| store::FileEntry { pos_ms: 0, size: 0, done };
 

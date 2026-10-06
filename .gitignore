@@ -2,3 +2,6 @@
 /bench_results
 /test_audio
 *.pdb
+/AppDir
+/linuxdeploy
+*.AppImage

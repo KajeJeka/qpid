@@ -1,0 +1,117 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:   # dry-run: builds everything, skips publishing
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Gates (same as ci.yml)
+        shell: pwsh
+        run: |
+          cargo test
+          $out = cargo build --release 2>&1 | Out-String
+          $warn = ([regex]::Matches($out, '(?m)^\s*--> src[/\\]')).Count
+          Write-Host "warning locations in src: $warn"
+          if ($warn -gt 7) { exit 1 }
+          $size = (Get-Item target\release\qpid.exe).Length
+          Write-Host "exe size: $size"
+          if ($size -gt 10485760) { exit 1 }
+      - run: Copy-Item target\release\qpid.exe "qpid-${env:GITHUB_REF_NAME}-windows-x86_64.exe"
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: "qpid-*-windows-x86_64.exe" }
+
+  appimage-x86_64:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04   # pinned glibc baseline — NEVER ubuntu-latest (section 14)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          apt-get update && apt-get install -y curl ca-certificates build-essential git libasound2-dev libfontconfig1-dev pkg-config
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: bash packaging/appimage/build.sh
+      # linuxdeploy names the output after the desktop Name= field (q-pid),
+      # so match any produced AppImage instead of assuming the prefix.
+      - run: mv ./*.AppImage "qpid-${GITHUB_REF_NAME}-x86_64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with: { name: appimage-x86_64, path: "qpid-*-x86_64.AppImage" }
+
+  appimage-aarch64:
+    runs-on: ubuntu-24.04-arm   # free for public repos; disable if unavailable on the account
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          apt-get update && apt-get install -y curl ca-certificates build-essential git libasound2-dev libfontconfig1-dev pkg-config
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - run: bash packaging/appimage/build.sh
+      - run: mv ./*.AppImage "qpid-${GITHUB_REF_NAME}-aarch64.AppImage"
+      - uses: actions/upload-artifact@v4
+        with: { name: appimage-aarch64, path: "qpid-*-aarch64.AppImage" }
+
+  flatpak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install flatpak tooling
+        run: sudo apt-get update && sudo apt-get install -y flatpak flatpak-builder
+      - name: Runtime (branch must match the manifest's runtime-version)
+        run: |
+          flatpak remote-add --if-not-exists --user flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.freedesktop.Platform//26.08 org.freedesktop.Sdk//26.08 org.freedesktop.Sdk.Extension.rust-stable//26.08
+      - name: Build + bundle
+        run: |
+          flatpak-builder --force-clean --repo=repo build-dir packaging/flatpak/io.github.KajeJeka.qpid.yml
+          flatpak build-bundle repo qpid.flatpak io.github.KajeJeka.qpid
+      - run: mv qpid.flatpak "qpid-${GITHUB_REF_NAME}.flatpak"
+      - uses: actions/upload-artifact@v4
+        with: { name: flatpak, path: "qpid-*.flatpak" }
+
+  aur:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render PKGBUILD with the ref's real checksum (section 13)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # R-L4: ref-aware URL — a tag run renders the tag's tarball; a
+          # workflow_dispatch dry-run falls back to the commit archive (no 404).
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            URL="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          else
+            VERSION="$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)"
+            URL="https://github.com/${GITHUB_REPOSITORY}/archive/${GITHUB_SHA}.tar.gz"
+          fi
+          curl -fsSL "$URL" -o src.tgz
+          SHA="$(sha256sum src.tgz | cut -d' ' -f1)"
+          sed -e "s/@VERSION@/${VERSION}/" -e "s/@SHA256@/${SHA}/" packaging/aur/PKGBUILD > PKGBUILD
+          bash -n PKGBUILD
+          mkdir out && cp PKGBUILD packaging/aur/README.md out/
+      - uses: actions/upload-artifact@v4
+        with: { name: aur, path: out/ }
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, appimage-x86_64, appimage-aarch64, flatpak, aur]
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Create release, attach everything
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "q-pid $GITHUB_REF_NAME" \
+            --notes "Windows exe, AppImage (x86_64 + aarch64), Flatpak bundle, AUR PKGBUILD render. Linux sizes reported per job; no Linux size budget set yet (see BENCH.md)."

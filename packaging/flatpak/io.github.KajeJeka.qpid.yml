@@ -4,6 +4,9 @@ app-id: io.github.KajeJeka.qpid
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'   # verify the branch exists on Flathub when this runs; fallback 25.08
 sdk: org.freedesktop.Sdk
+# R-L6(a): freedesktop Sdk ships no cargo — rust comes from the SDK extension.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
 command: qpid
 finish-args:
   - --socket=pulseaudio     # standard Flatpak audio grant (ALSA-over-PulseAudio / PipeWire pulse socket)
@@ -20,6 +23,7 @@ modules:
   - name: qpid
     buildsystem: simple
     build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
       build-args:
         # Self-hosted only: cargo needs the network inside the build
         # sandbox. Flathub would require cargo-vendored sources instead —
