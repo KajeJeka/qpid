@@ -530,11 +530,11 @@ fn handle_command(
         Command::SeekRelative(delta_ms) => {
             let cur = shared.position_ms() as i64;
             let target = (cur + delta_ms).max(0) as u64;
-            seek_to(target, ctx, state, shared);
+            seek_to(target, true, ctx, state, shared);
         }
 
         Command::SeekAbsolute(ms) => {
-            seek_to(ms, ctx, state, shared);
+            seek_to(ms, false, ctx, state, shared);
         }
 
         Command::Next => {
@@ -548,11 +548,11 @@ fn handle_command(
                 // Restart current file (named constant, partner decision).
                 let dur_target_zero = 0;
                 match *state {
-                    PlayState::Playing => flush_playing(ctx.as_mut().unwrap(), dur_target_zero, shared),
+                    PlayState::Playing => flush_playing(ctx.as_mut().unwrap(), dur_target_zero, false, shared),
                     _ => {
                         shared.base_ms.store(0, Ordering::Relaxed);
                         shared.played_frames.store(0, Ordering::Relaxed);
-                        if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
+                        if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0, false); c.stretcher.reset(); c.resampler.reset(); }
                     }
                 }
                 // Trigger 3: restart recorded after the fact so pos 0 is
@@ -562,11 +562,11 @@ fn handle_command(
             } else if *idx > 0 {
                 advance_to(*idx - 1, playlist, idx, store, state, ctx, released_path, shared, tx_events, true);
             } else if *state == PlayState::Playing {
-                flush_playing(ctx.as_mut().unwrap(), 0, shared); // restart first file
+                flush_playing(ctx.as_mut().unwrap(), 0, false, shared); // restart first file
             } else {
                 shared.base_ms.store(0, Ordering::Relaxed);
                 shared.played_frames.store(0, Ordering::Relaxed);
-                if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0); c.stretcher.reset(); c.resampler.reset(); }
+                if let Some(c) = ctx.as_mut() { let _ = c.decoder.seek(0, false); c.stretcher.reset(); c.resampler.reset(); }
             }
         }
 
@@ -598,7 +598,7 @@ fn handle_command(
                 c.stretcher.set_speed(speed);
             }
             if matches!(*state, PlayState::Playing | PlayState::Paused) {
-                seek_to(cur, ctx, state, shared);
+                seek_to(cur, false, ctx, state, shared);
             }
         }
     }
@@ -607,6 +607,7 @@ fn handle_command(
 
 fn seek_to(
     target_ms: u64,
+    relative: bool,
     ctx: &mut Option<PlaybackContext>,
     state: &mut PlayState,
     shared: &Arc<Shared>,
@@ -634,13 +635,13 @@ fn seek_to(
 
     match *state {
         PlayState::Playing => {
-            flush_playing(c, clamped, shared);
+            flush_playing(c, clamped, relative, shared);
         }
         PlayState::Paused | PlayState::Ended => {
             // Not producing audio right now; just record where we'll resume.
             shared.base_ms.store(clamped, Ordering::Relaxed);
             shared.played_frames.store(0, Ordering::Relaxed);
-            if let Err(e) = c.decoder.seek(clamped) {
+            if let Err(e) = c.decoder.seek(clamped, relative) {
                 let _ = e; // Phase 1: swallow; Phase 3 surfaces via Event::Message
             }
             c.stretcher.reset(); // no stale samples from before the seek
@@ -755,7 +756,7 @@ fn open_path(
 
                     if let Some(c) = ctx.as_mut() {
                         if start_pos > 0 {
-                            let _ = c.decoder.seek(start_pos);
+                            let _ = c.decoder.seek(start_pos, false);
                         }
                         prefill(c, shared, PREROLL_MS);
                         c.output.play();
@@ -996,9 +997,9 @@ fn refill_and_release_flush(ctx: &mut PlaybackContext, shared: &Arc<Shared>, bas
     shared.set_gain(1.0);
 }
 
-fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, shared: &Arc<Shared>) {
+fn flush_playing(ctx: &mut PlaybackContext, target_ms: u64, relative: bool, shared: &Arc<Shared>) {
     ramp_and_flush_ack(ctx, shared);
-    let _ = ctx.decoder.seek(target_ms);
+    let _ = ctx.decoder.seek(target_ms, relative);
     ctx.stretcher.reset();
     ctx.resampler.reset();
     refill_and_release_flush(ctx, shared, target_ms);
@@ -1154,7 +1155,7 @@ fn restart_from_ended(
 ) {
     *paused_since = None;
     if let Some(c) = ctx.as_mut() {
-        flush_playing(c, 0, shared);
+        flush_playing(c, 0, false, shared);
         *state = PlayState::Playing;
         let _ = tx_events.send(Event::StateChanged(*state));
     } else if let Some(path) = released_path.take() {
@@ -1163,7 +1164,7 @@ fn restart_from_ended(
             released_path, playlist, idx,
         );
         if let Some(c) = ctx.as_mut() {
-            flush_playing(c, 0, shared);
+            flush_playing(c, 0, false, shared);
         }
     }
 }

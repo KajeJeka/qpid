@@ -53,6 +53,30 @@ pub struct Frames {
     pub frame_count: usize,
 }
 
+/// Section 7.6 seek-mode policy: once an Accurate seek takes more than
+/// 300 ms (VBR MP3 without a table of contents), fall back to `Coarse`
+/// for the relative seeks only — absolute seeks always stay Accurate.
+#[derive(Default)]
+pub struct SeekPolicy {
+    coarse_relative: bool,
+}
+
+impl SeekPolicy {
+    pub fn mode_for(&self, relative: bool) -> SeekMode {
+        if relative && self.coarse_relative {
+            SeekMode::Coarse
+        } else {
+            SeekMode::Accurate
+        }
+    }
+
+    pub fn note_cost(&mut self, cost: std::time::Duration) {
+        if cost.as_millis() > 300 {
+            self.coarse_relative = true;
+        }
+    }
+}
+
 pub struct Decoder {
     path: PathBuf,
     format: Box<dyn FormatReader>,
@@ -62,6 +86,8 @@ pub struct Decoder {
     channels: usize,
     duration_ms: Option<u64>,
     sample_buf: Option<SampleBuffer<f32>>,
+    /// Section 7.6 timing rule: relative seeks go Coarse after a >300 ms seek.
+    policy: SeekPolicy,
     // Preallocated scratch for the stereo-folded output. Grown once to the
     // largest chunk seen, never reallocated per-packet in steady state.
     // NOTE: `decode_chunk` currently moves this Vec out via `mem::take` to
@@ -134,6 +160,7 @@ impl Decoder {
             channels,
             duration_ms,
             sample_buf: None,
+            policy: SeekPolicy::default(),
             scratch: Vec::new(),
         })
     }
@@ -209,18 +236,23 @@ impl Decoder {
     }
 
     /// Accurate seek per section 7.6: seek then decode-and-discard until the
-    /// requested timestamp. Falls back silently to whatever the underlying
-    /// format's coarse seek gives us if accurate seeking errors out (some
-    /// VBR MP3s without a seek table).
-    pub fn seek(&mut self, target_ms: u64) -> Result<(), DecodeError> {
+    /// requested timestamp. `relative` marks user f/b seeks: after any seek
+    /// costs more than 300 ms (some VBR MP3s without a seek table), relative
+    /// seeks switch to `Coarse` while absolute seeks stay Accurate. Falls
+    /// back silently to `Coarse` for the current seek if the Accurate seek
+    /// errors out.
+    pub fn seek(&mut self, target_ms: u64, relative: bool) -> Result<(), DecodeError> {
         let time = Time::from(target_ms as f64 / 1000.0);
+        let mode = self.policy.mode_for(relative);
+        let started = std::time::Instant::now();
         let seek_result = self.format.seek(
-            SeekMode::Accurate,
+            mode,
             SeekTo::Time {
                 time,
                 track_id: Some(self.track_id),
             },
         );
+        self.policy.note_cost(started.elapsed());
 
         match seek_result {
             Ok(_) => {
@@ -293,4 +325,38 @@ fn buffer_to_stereo(
     }
 
     frames
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // Section 7.6: once an Accurate seek takes MORE than 300 ms, fall back
+    // to Coarse for the relative seeks only (absolute seeks stay Accurate).
+    #[test]
+    fn slow_relative_seek_switches_future_relative_seeks_to_coarse() {
+        let mut p = SeekPolicy::default();
+        assert_eq!(p.mode_for(true), SeekMode::Accurate);
+        p.note_cost(Duration::from_millis(350));
+        assert_eq!(p.mode_for(true), SeekMode::Coarse);
+        assert_eq!(p.mode_for(false), SeekMode::Accurate);
+    }
+
+    #[test]
+    fn fast_seek_never_switches() {
+        let mut p = SeekPolicy::default();
+        p.note_cost(Duration::from_millis(100));
+        p.note_cost(Duration::from_millis(300)); // "more than 300 ms" only
+        assert_eq!(p.mode_for(true), SeekMode::Accurate);
+    }
+
+    #[test]
+    fn coarse_flag_is_sticky_once_set() {
+        let mut p = SeekPolicy::default();
+        p.note_cost(Duration::from_millis(301));
+        p.note_cost(Duration::from_millis(5));
+        assert_eq!(p.mode_for(true), SeekMode::Coarse);
+        assert_eq!(p.mode_for(false), SeekMode::Accurate);
+    }
 }
