@@ -120,8 +120,6 @@ impl TimerControl {
     }
 
     fn tick(&mut self) {
-        #[cfg(debug_assertions)]
-        eprintln!("[tick]");
         self.refresh();
     }
 
@@ -311,7 +309,8 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     with_tc(|slot| {
         *slot = Some(TimerControl::new(window.as_weak(), Arc::clone(&shared)));
     });
-    crate::winit_hook::set_sink(|visible| {
+    let weak_sink = window.as_weak();
+    crate::winit_hook::set_sink(move |visible| {
         // Section 11.7 rule 7: EcoQoS follows visibility (minimize or
         // occlusion). Trim rides the same transition (Phase 5 item 1,
         // optional); QPID_NO_TRIM is the measurement escape hatch budget 4
@@ -326,6 +325,20 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
                 t.set_visible(visible);
             }
         });
+        if visible {
+            // Restore-from-minimize: the window surface is invalidated and
+            // the restore-time draw can present before DWM finishes showing
+            // the window, so its full repaint is lost and only later
+            // partial updates (timer ticks) appear — leaving title/buttons
+            // stale or blank. Bump the repaint nonce on the next
+            // event-loop iteration to re-mark the whole window dirty.
+            let weak = weak_sink.clone();
+            slint::Timer::single_shot(Duration::from_millis(50), move || {
+                if let Some(w) = weak.upgrade() {
+                    w.set_repaint_nonce(w.get_repaint_nonce() + 1);
+                }
+            });
+        }
     });
 
     // Drain engine events and reflect them onto the window: track/title/

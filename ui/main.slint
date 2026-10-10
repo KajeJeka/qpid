@@ -149,6 +149,10 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     in property <int> speed-index: 1; // 0=0.5x 1=1x 2=1.25x 3=1.5x 4=2x
     in property <bool> seek-enabled: false;
+    // Restore-from-minimize repaint trigger (ui.rs visibility sink): the
+    // full-size overlay below reads it, so a bump marks the whole window
+    // dirty and forces a complete redraw.
+    in property <int> repaint-nonce: 0;
 
     // Help overlay: pure-slint state (button, backdrop and Esc all write it
     // directly) — no Rust wiring, no callback round-trip.
@@ -424,5 +428,19 @@ export component MainWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Full-window transparent overlay: its border-width reads
+    // repaint-nonce, so bumping the nonce marks this full-size rect dirty
+    // and the software renderer re-renders every item under it. Needed
+    // because restore-from-minimize invalidates the window surface: the
+    // restore-time draw presents too early (discarded by DWM) and later
+    // partial updates (timer ticks) repaint only their own small regions,
+    // leaving the rest of the window stale or blank.
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        border-width: root.repaint-nonce * 0px;
     }
 }
