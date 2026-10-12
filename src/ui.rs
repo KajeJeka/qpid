@@ -81,7 +81,7 @@ fn pulsar_row(peaks: &[AtomicU32; 128], head: u32, _row: usize, _rows: usize) ->
     let w = 48.0f32;
     let mut out = [0.0f32; 48];
     for x in 0..48 {
-        let idx = (head.wrapping_sub(48) + x as u32) % 128;
+        let idx = head.wrapping_sub(48).wrapping_add(x as u32) % 128;
         let v = f32::from_bits(peaks[idx as usize].load(Ordering::Relaxed));
         out[x] = v * bell_weight(x as f32, w);
     }
@@ -94,7 +94,7 @@ fn pulsar_row(peaks: &[AtomicU32; 128], head: u32, _row: usize, _rows: usize) ->
 fn line_points(peaks: &[AtomicU32; 128], head: u32, mid: f32, half: f32) -> [(f32, f32); 128] {
     let mut out = [(0.0f32, 0.0f32); 128];
     for i in 0..128 {
-        let idx = (head.wrapping_sub(128) + i as u32) % 128;
+        let idx = head.wrapping_sub(128).wrapping_add(i as u32) % 128;
         let v = f32::from_bits(peaks[idx as usize].load(Ordering::Relaxed));
         let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
         out[i] = (i as f32, mid + sign * v * half);
@@ -116,14 +116,12 @@ const VIZ_DIVIDER: [u8; 4] = [0x23, 0x28, 0x1c, 0xff];
 const VIZ_ACCENT: [u8; 4] = [0x3a, 0xb8, 0x14, 0xff];
 const VIZ_PULSAR_BACK: [u8; 4] = [0x1c, 0x5a, 0x10, 0xff];
 
-/// Design §8.3.1: strip width × 72 logical, in physical pixels, capped
-/// 1280 × 240.
+/// Design §8.3.1: strip height 72 logical, in physical pixels, width taken
+/// straight from the window's physical size, capped 1280 × 240.
 fn viz_buffer_size(window: &slint::Window) -> (u32, u32) {
-    let scale = window.scale_factor();
-    let logical = window.size().to_logical(scale);
-    let w = (logical.width as f32 * scale).round() as u32;
-    let h = (72.0 * scale).round() as u32;
-    (w.clamp(2, 1280), h.clamp(2, 240))
+    let physical = window.size(); // already physical px — no round trip
+    let h = (72.0 * window.scale_factor()).round() as u32;
+    (physical.width.clamp(2, 1280), h.clamp(2, 240))
 }
 
 #[inline]
@@ -246,18 +244,28 @@ fn draw_pulsar_mode(buf: &mut slint::SharedPixelBuffer<slint::Rgba8Pixel>, histo
         let color = lerp_color(VIZ_PULSAR_BACK, VIZ_ACCENT, (14 - r) as f32 / 14.0);
         let row = &history[r];
         // occlusion fill: from each column's curve down to the baseline plus
-        // one spacing, so the next (front) row hides this one behind it
+        // one spacing, so the next (front) row hides this one behind it.
+        // Fill the whole pixel span of each sample column (not a 1 px
+        // stroke) — at ~440 px wide the 48 samples are ~9 px apart and a
+        // 1 px fill would leave slots for the back rows to show through.
         {
             let bh = buf.height() as usize;
             let bw = buf.width() as usize;
             let data = buf.make_mut_bytes();
             for x in 0..48 {
-                let px = (x as f32 * sx) as usize;
+                let px = ((x as f32 * sx) as usize).min(bw - 1);
+                let next_px = if x == 47 {
+                    bw
+                } else {
+                    (((x + 1) as f32 * sx).ceil() as usize).min(bw).max(px + 1)
+                };
                 let curve_y = (baseline - row[x] * amp).floor().max(0.0) as usize;
                 let fill_end = ((baseline + spacing).ceil() as usize).min(bh - 1);
                 for py in curve_y..=fill_end {
-                    let idx = py * bw * 4 + px * 4;
-                    data[idx..idx + 4].copy_from_slice(&VIZ_BG);
+                    for pxi in px..next_px {
+                        let idx = py * bw * 4 + pxi * 4;
+                        data[idx..idx + 4].copy_from_slice(&VIZ_BG);
+                    }
                 }
             }
         }
@@ -338,9 +346,15 @@ impl TimerControl {
         }
         self.viz_mode = mode;
         // Design §8.4.2: on mode change the buffer clears — zero the
-        // history and arm the sentinel so the next tick redraws fresh.
+        // history, arm the sentinel so the next tick redraws fresh, and
+        // drop the Slint-side image now: while paused the timer is
+        // stopped, so without this the old mode's frozen frame would sit
+        // under the new label until playback resumes.
         self.viz_history = [[0.0; 48]; 15];
         self.last_viz_head = u32::MAX;
+        if let Some(window) = self.weak.upgrade() {
+            window.set_viz_image(slint::Image::default());
+        }
         if self.running {
             self.running = false;
             self.timer.stop();
@@ -783,6 +797,20 @@ mod tests {
         // newest value (index 99) sits at x=47 before bell scaling (bell(47) tiny) —
         // assert row[24] corresponds to head-24 == 76 and equals 76 * bell_weight(24,48)
         assert!((row[24] - 76.0 * bell_weight(24.0, 48.0)).abs() < 1e-3);
+    }
+
+    // Regression (T5 fix round 1): head below the window size made the
+    // index math overflow a plain `+` — panic in debug, silent wrap in
+    // release. wrapping_add makes every head safe; these small-head calls
+    // are the debug-build canary.
+    #[test]
+    fn viz_helpers_tolerate_small_head() {
+        let peaks = std::array::from_fn(|_| AtomicU32::new(0));
+        let row = pulsar_row(&peaks, 10, 0, 15); // head < 48
+        assert_eq!(row, [0.0; 48]);
+        let pts = line_points(&peaks, 100, 36.0, 30.0); // head < 128
+        assert_eq!(pts[127], (127.0, 36.0));
+        assert_eq!(pts[100].1, 36.0); // zero peak -> exactly mid
     }
 
     #[test]
