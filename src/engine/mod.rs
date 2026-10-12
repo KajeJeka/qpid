@@ -230,10 +230,11 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     let mut store = store::load();
 
     // Design §8.5: once after the store loads, hand the UI the persisted
-    // speed row and viz mode.
+    // speed row and viz mode. Clamp: a hand-edited state.json can carry
+    // any u8, and the UI property/label must always be 0..=2.
     let _ = tx_events.send(Event::Settings {
         speed_index: Speed::from_milli(store::speed_to_milli(store.speed)).index(),
-        viz: store.viz,
+        viz: store.viz.min(2),
     });
 
     let mut state = PlayState::Idle;

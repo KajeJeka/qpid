@@ -602,6 +602,6 @@ mod tests {
 
     #[test]
     fn next_viz_mode_clamps_out_of_range() {
-        assert_eq!(next_viz_mode(5), 0); // (5 + 1) % 3 == 0 — locked wrap
+        assert_eq!(next_viz_mode(5), 0); // clamp-then-wrap: 5 clamps to 2, (2 + 1) % 3 == 0
     }
 }
