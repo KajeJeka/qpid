@@ -13,6 +13,7 @@
 ## Global Constraints
 
 - Windows regression gates after every code task (Tasks 1, 3): `cargo test` passes (34 baseline; 35 after Task 3's new `key()` test), release warnings **≤ 7** (record count; T1 may reduce it — pin new baseline in ledger), release exe **≤ 10,485,760 B** (currently 10,452,992).
+  > Note (v1.2.0+): the q-pid Windows exe cap moved to **11,031,024 B** — see architecture.md budget 1. The 10,485,760 figures below are this plan's historical record and were not rewritten.
 - **Budget 8 is AT CAP (12/12) on Windows** — no new Windows thread. The Linux `qpid-pipe` listener reuses the sanctioned 4th-thread slot (linux-port.md §7).
 - **Zero new runtime dependencies.** Winresource moves under `[target.'cfg(windows)'.build-dependencies]`; `libc` is NOT added (Linux thread-priority stays a no-op, §4).
 - Never run/claim Linux budgets — no Linux numbers in `BENCH.md` until the friend measures them (linux-port.md §15).

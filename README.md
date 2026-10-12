@@ -1,8 +1,8 @@
 # q-pid
 
-A small folder-based audio player for Windows and Linux, written in Rust with a Slint UI. Point it at a folder or a file, and it plays the folder as a naturally sorted playlist: seek bar, skip buttons, five playback speeds that keep pitch, session restore, and media-key support (Windows). A headless `--cli` mode runs the same engine without a window.
+A small folder-based audio player for Windows and Linux, written in Rust with a Slint UI. Point it at a folder or a file, and it plays the folder as a naturally sorted playlist: seek bar, skip buttons, five playback speeds that keep pitch, an optional audio visualizer (Line and Pulsar modes), session restore, and media-key support (Windows). A headless `--cli` mode runs the same engine without a window.
 
-It is built to strict resource limits: the Windows executable stays under 10 MB, a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [docs/BENCH.md](docs/BENCH.md); the normative design lives in [docs/architecture.md](docs/architecture.md).
+It is built to strict resource limits: the Windows executable stays at or below **11,031,024 B (10.52 MiB)** — the cap in [docs/architecture.md](docs/architecture.md) §2 — a minimized instance keeps CPU near zero, the process uses no more than 12 threads, and the background engine wakes no more than twice per second. Every number in this README comes from the measurement tables in [docs/BENCH.md](docs/BENCH.md); the normative design lives in [docs/architecture.md](docs/architecture.md).
 
 ## Download
 
@@ -17,8 +17,8 @@ Linux packages ship on the [v1.1.0 release](https://github.com/KajeJeka/qpid/rel
 ## Building and running
 
 ```powershell
-cargo build --release        # target\release\qpid.exe (<= 10 MB by design)
-cargo test                   # 35 tests (38 on Linux: +3 platform::linux)
+cargo build --release        # target\release\qpid.exe (<= 11,031,024 B by design)
+cargo test                   # 47 tests (50 on Linux: +3 platform::linux)
 target\release\qpid.exe                      # restore last session, paused
 target\release\qpid.exe <folder-or-file>     # open and play immediately
 target\release\qpid.exe --cli [file]         # headless mode, stdin controls
@@ -30,7 +30,7 @@ On Linux the build needs `libasound2-dev libfontconfig1-dev pkg-config`
 workflow builds three package formats from `packaging/`: AppImage
 (x86_64 + aarch64), Flatpak bundle, and a rendered AUR `PKGBUILD`.
 
-Release settings favor size over speed (`opt-level = "s"`, fat LTO, LTO'd dependencies, symbols stripped): decode and resample do not come close to saturating one core at 1x, and the 10 MB budget binds harder than dependency speed. The UI uses Slint's software renderer, so there is no GPU or driver dependency.
+Release settings favor size over speed (`opt-level = "s"`, fat LTO, LTO'd dependencies, symbols stripped): decode and resample do not come close to saturating one core at 1x, and the size budget binds harder than dependency speed. The UI uses Slint's software renderer, so there is no GPU or driver dependency.
 
 Supported formats: mp3, m4a, m4b, aac, flac, ogg, wav (via symphonia).
 
@@ -64,14 +64,14 @@ The process runs at most 12 threads at once (the thread budget; measured at 11 i
 | qpid-pipe | named-pipe listener for second-instance handoffs |
 | media keys | owns the `WM_HOTKEY` message window |
 
-Everything else is deliberately absent: no timers beyond one 500 ms UI position ticker, no watchdog threads, no background scanners. Work rides existing wakes.
+Everything else is deliberately absent: no timers beyond one UI position ticker (500 ms with the visualizer off, 66/100 ms in Line/Pulsar mode), no watchdog threads, no background scanners. Work rides existing wakes.
 
 ### 3. Talking to the engine (`Command`, `Event`, `Shared`)
 
 The UI and the engine share three things, all defined in `src/engine/mod.rs`:
 
-- `Command` is an `mpsc` channel into the engine: `OpenPath`, `Play`, `Pause`, `TogglePlay`, `SeekRelative`, `SeekAbsolute`, `Next`, `Prev`, `SetSpeed`, `RestoreSession`, `Shutdown`.
-- `Event` is the channel back: `TrackChanged`, `StateChanged`, `Message`.
+- `Command` is an `mpsc` channel into the engine: `OpenPath`, `Play`, `Pause`, `TogglePlay`, `SeekRelative`, `SeekAbsolute`, `Next`, `Prev`, `SetSpeed`, `SetViz`, `RestoreSession`, `Shutdown`.
+- `Event` is the channel back: `TrackChanged`, `StateChanged`, `Message`, `Settings` (sent once after the store loads; restores the speed row and visualizer mode).
 - `Shared` is a block of atomics both sides read lock-free. The UI timer never blocks and never wakes the engine to read the playhead; it just computes
 
 ```
@@ -136,19 +136,19 @@ If cpal reports a device error (unplug, sleep), the engine pauses the same way a
 
 ### 9. Persistence (`src/store.rs`)
 
-State lives in `%LOCALAPPDATA%\qpid\state.json` on Windows and `~/.local/state/qpid/state.json` on Linux (`$XDG_STATE_HOME` when set): last folder, last file, per-file position and size, a `done` flag per file, playback speed, and up to 100 folders of history. Loading is forgiving: a missing, corrupt, or wrong-version file loads as defaults, never a crash. Saving goes through one function, `save_now`, called only at well-defined triggers: pause, opening another file, next/prev, speed change, error stops, the 30-second checkpoint while playing, and application exit (including the panic-free paths where the UI channel just closes).
+State lives in `%LOCALAPPDATA%\qpid\state.json` on Windows and `~/.local/state/qpid/state.json` on Linux (`$XDG_STATE_HOME` when set): last folder, last file, per-file position and size, a `done` flag per file, playback speed, visualizer mode, and up to 100 folders of history. Loading is forgiving: a missing, corrupt, or wrong-version file loads as defaults, never a crash. Saving goes through one function, `save_now`, called only at well-defined triggers: pause, opening another file, next/prev, speed change, visualizer change, error stops, the 30-second checkpoint while playing, and application exit (including the panic-free paths where the UI channel just closes).
 
 A file position is only trusted if the file size still matches; a restored position rewinds a hair before resume (the constant exists even though it is currently 0).
 
 ### 10. The UI layer (`src/ui.rs`, `ui/main.slint`)
 
-The UI is intentionally dumb. It may import exactly `Command`, `Event`, and `Shared` from the engine, never the decoder or DSP. Buttons translate to commands; events update labels and messages. One sanctioned Slint timer ticks every 500 ms while playing and the window is visible, updating the position label and slider; pause or minimize stops it.
+The UI is intentionally dumb. It may import exactly `Command`, `Event`, and `Shared` from the engine, never the decoder or DSP. Buttons translate to commands; events update labels and messages. One sanctioned Slint timer runs while playing and the window is visible, updating the position label and slider and drawing the visualizer strip (500 ms with the visualizer off, 66 ms Line, 100 ms Pulsar); pause or minimize stops it.
 
 The visibility sink from the winit hook does two jobs on minimize: it switches the process to EcoQoS (Windows power throttling) and trims the working set (`QPID_NO_TRIM=1` disables the trim for measurement). Restoring the window undoes both. Dragging a file onto the window arrives through the same hook as an `OpenPath` command.
 
 ### 11. Where the numbers come from
 
-The nine resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate) are defined in docs/architecture.md §2 and measured in docs/BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap 10,485,760), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
+The ten resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate, visualizer CPU) are defined in docs/architecture.md §2 and measured in docs/BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap at that tag 10,485,760; the cap is now 11,031,024 B), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
 
 ## Repository layout
 

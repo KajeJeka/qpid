@@ -124,8 +124,9 @@ pub struct Shared {                 // all atomics, read by the UI timer
     pub flush_ack: AtomicBool,
     pub eof: AtomicBool,
     pub drained: AtomicBool,
-    // T5 adds three viz atomics: viz_on: AtomicBool, viz_head: AtomicU32,
-    // viz_peaks: [AtomicU32; 128] (peak as f32 bits)
+    // viz atomics: viz_on gates the audio-side peak tap (true only when
+    // the visualizer mode is not Off and the window is visible), viz_head
+    // is the ring write cursor, viz_peaks holds 128 block peaks as f32 bits
 }
 ```
 

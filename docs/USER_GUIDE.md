@@ -11,13 +11,13 @@ and in the CLI — with the source line behind each behavior.
 
 | Launch | Behavior |
 |---|---|
-| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:188-191`, `src/engine/mod.rs:797-856`). Nothing in history → empty window. |
-| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:186-187`, autoplay at `src/engine/mod.rs:756-764`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:141`). |
+| Double-click `qpid.exe` (no arguments) | Restores your last session: folder, track, position, speed — **paused, no sound until you press Play** (`src/main.rs:188-191`, `src/engine/mod.rs:842-896`). Nothing in history → empty window. |
+| `qpid.exe <file-or-folder>` (or Explorer "Open with") | Opens and **plays immediately** (`src/main.rs:186-187`, autoplay at `src/engine/mod.rs:806-811`). Re-opening a file you only half-finished resumes where you stopped — if the file hasn't changed size since it was saved (`src/store.rs:141`). |
 | `qpid.exe --cli <file-or-folder>` | Headless mode: no window, everything driven from the keyboard stdin (see §6). Meant for testing/benchmarks (`src/main.rs:29-33`). |
 
 On every exit — close button, `q`, or stdin end — the current position is
 saved before the process dies (`src/main.rs:156-157` CLI, `src/main.rs:196-197`
-UI, `src/engine/mod.rs:459-466`).
+UI, `src/engine/mod.rs:492-500`).
 
 **One copy at a time:** *Opening a second copy hands the file to the
 running window* — q-pid holds a machine-wide lock (`Global\qpid-instance`,
@@ -33,88 +33,119 @@ session can run alongside the UI (`src/main.rs:161-163`).
 
 Dark theme only (`ui/main.slint:4-6`); native OS title bar.
 
-### Open file / Open folder (top-left)
+### Top row: Open file · Open folder · Visualizer · Help
 
-- **Open file** (`ui/main.slint:220-235`) — native file dialog filtered to
-  **mp3, m4a, m4b, aac, flac, ogg, wav** (`src/ui.rs:170`). Picking a file
+- **Open file** (`ui/main.slint:463-466`) — native file dialog filtered to
+  **mp3, m4a, m4b, aac, flac, ogg, wav** (`src/ui.rs:488`). Picking a file
   plays it (with its saved position).
-- **Open folder** (`ui/main.slint:237-252`) — scans the folder for playable
+- **Open folder** (`ui/main.slint:467-470`) — scans the folder for playable
   files. Empty folder → green status **"No audio files in folder"**
-  (`src/engine/mod.rs:686`). Otherwise it picks the start file by rule:
+  (`src/engine/mod.rs:731`). Otherwise it picks the start file by rule:
   **last file if you hadn't finished it → first unfinished → first file**
-  (`src/engine/mod.rs:655-664`).
-- **Help** — opens an in-app overlay listing every keyboard shortcut and
-  button with what it does. Click anywhere (or press `Esc`) to close; while
-  it's open the other keys are ignored.
+  (`src/engine/mod.rs:739-764`).
+- **Visualizer** (wave icon button, `ui/main.slint:472-475`) — cycles the
+  audio visualizer Off → Line → Pulsar → Off; same as the `V` key (see
+  below).
+- **Help** (`?` icon button, `ui/main.slint:476-479`) — opens the keyboard
+  overlay; full behavior in §3.
 
 ### Folder line
 
-The full folder path of the current track, muted small text, truncated if too
-long (`ui/main.slint:273-279`).
+The folder **name** of the current track (the last path component, not the
+full path), muted small text next to a 14 px folder icon, elided if too long
+(`ui/main.slint:482-500`; computed in `src/ui.rs:50-55` — a drive root with
+no file name shows the full string).
 
 ### Track area
 
-- Nothing loaded yet: **"Drop a folder or file here, or press Open"**
-  (`ui/main.slint:283`). **Drop a file or folder anywhere on the window to
+- Nothing loaded yet: a sunken **card** reading **"Drop a folder or file
+  here, or press Open"** with a folder icon (`ui/main.slint:541-562`),
+  taking the same height as the folder+title rows so nothing moves when a
+  track loads. **Drop a file or folder anywhere on the window to
   open it** — drag-and-drop runs through the winit hook
-  (`src/winit_hook.rs:99`, sink registered at `src/ui.rs:194`). A drop
+  (`src/winit_hook.rs:99`, sink registered at `src/ui.rs:517`). A drop
   while another file plays behaves like Open file: the current file's
   position is saved first, then the dropped one plays.
 - Track loaded: **title** (filename without extension — no tags or cover
-  art, `src/engine/mod.rs:1027`) plus **`N / M`** position in the playlist
-  (`ui/main.slint:291-307`).
+  art, `src/engine/mod.rs:1072`) plus **`N / M`** position in the playlist
+  in a small pill next to it (`ui/main.slint:502-538`).
+
+### Visualizer strip (PULSAR)
+
+Three modes — **Off** (default), **Line**, **Pulsar**. Cycle with `V`, the
+top-row wave button, or a click on the small **Line**/**Pulsar** mode label
+in the strip itself (`ui/main.slint:443`, `472-475`, `580-597`; combined in
+`src/ui.rs:635-657`).
+
+- Turning the strip on or off **resizes the window by 80 px** (72 px strip
+  plus its 8 px gap); Line ⇄ Pulsar does not resize (`src/ui.rs:651-655`).
+  Min/preferred height follow the mode (`ui/main.slint:352-355`). If the
+  window manager refuses the resize (maximized, tiled) the strip stays
+  hidden until there is room.
+- The mode is saved in `state.json` as `viz` and restored at launch
+  (`src/store.rs:19`; saved via `Command::SetViz`, `src/engine/mod.rs:638-647`;
+  sent to the UI once at startup through `Event::Settings`,
+  `src/engine/mod.rs:243-248`).
+- **Line**: an accent waveform over the last 256 ms of audio on a center
+  line. **Pulsar**: a 15-row stacked history tinted from dark green (back)
+  to accent (front) (`src/ui.rs:194-279`).
+- Drawing rides the one sanctioned UI timer — 500 ms Off, 66 ms Line,
+  100 ms Pulsar (`src/ui.rs:377-382`). While paused or minimized the strip
+  **freezes on the last frame** with zero CPU (`src/ui.rs:407-430`).
 
 ### Seek row: elapsed — slider — duration
 
 - Times use **`m:ss`** under an hour (`1:15`) and **`h:mm:ss`** from an hour
-  up (`1:00:00`) (`src/ui.rs:25-33`).
+  up (`1:00:00`) (`src/ui.rs:23-31`).
 - Duration shows blank when the file's duration isn't known yet
-  (`src/ui.rs:135`).
+  (`src/ui.rs:439`).
 - The slider itself is described in §4.
 
 ### Transport row
 
-Centered: `|<` · `-15` · **play/pause** · `+15` · `>|` (`ui/main.slint:335-350`).
+Centered: previous · `-15` · **play/pause** · `+15` · next — drawn as
+`Path` icons, not text glyphs (`ui/main.slint:634-657`).
 
 | Button | Key | What it does |
 |---|---|---|
-| `\|<` Previous | `P` | **More than 5 s in → restarts the current track from 0**; otherwise jumps to the previous track; on the first track → restarts it (`src/engine/mod.rs:545-571`). |
-| `-15` | `←` | Back 15 s, never below 0 (`src/engine/mod.rs:530-534`). |
-| Play / Pause (big green circle) | `Space` | Playing ⇄ paused. On a finished track (Ended) it **restarts from 0** (`src/engine/mod.rs:513-527`). With nothing loaded, nothing happens. |
-| `+15` | `→` | Forward 15 s, clamped to **duration − 1 s** — you can't seek into the last second (`src/engine/mod.rs:617-622`). |
-| `>\|` Next | `N` | Next track; on the **last** track it does nothing (`src/engine/mod.rs:540-544`). |
+| Previous | `P` | **More than 5 s in → restarts the current track from 0**; otherwise jumps to the previous track; on the first track → restarts it (`src/engine/mod.rs:578-604`, threshold `src/engine/mod.rs:219`). |
+| `-15` | `←` | Back 15 s, never below 0 (`src/engine/mod.rs:563-567`). |
+| Play / Pause (big green circle) | `Space` | Playing ⇄ paused. On a finished track (Ended) it **restarts from 0** (`src/engine/mod.rs:546-561`). With nothing loaded, nothing happens. |
+| `+15` | `→` | Forward 15 s, clamped to **duration − 1 s** — you can't seek into the last second (`src/engine/mod.rs:662-667`). |
+| Next | `N` | Next track; on the **last** track it does nothing (`src/engine/mod.rs:573-577`). |
 
 All transport buttons are always clickable; the engine safely ignores them
 when there's no track.
 
 ### Speed row
 
-Five segments: **0.5x, 1x, 1.25x, 1.5x, 2x** (`ui/main.slint:358-362`).
-The active one is a green pill — that's the whole "display"; there is no
-separate readout. Clicking a segment:
+Five segments — **0.5x, 1x, 1.25x, 1.5x, 2x** — inside one pill-shaped
+container; the active segment becomes an accent pill, and that's the whole
+"display"; there is no separate readout (`ui/main.slint:659-709`). Clicking
+a segment:
 
 - changes speed **immediately at the current position** (a flush — no jump,
-  audible within ~100 ms, `src/engine/mod.rs:577-603`),
-- is **remembered** across sessions (`src/engine/mod.rs:422, 850`),
+  audible within ~100 ms, `src/engine/mod.rs:610-636`),
+- is **remembered** across sessions (`src/engine/mod.rs:624`) and the row is
+  re-synced to the saved speed at launch via `Event::Settings`
+  (`src/engine/mod.rs:243-248`, `src/ui.rs:738-748`),
 - keyboard: `[` steps down one segment, `]` steps up, clamped at both ends
-  (`src/ui.rs:46-48`).
-
-⚠️ Known quirk: after a session restore the audio may already play at your
-saved speed while the row still shows the default 1x — there's no speed
-event to sync it. **Click any segment to resync** (`IMPLEMENTATION.md:88-90`).
+  (`src/ui.rs:44-46`, `618-622`; `ui/main.slint:444-445`).
 
 ### Status line (bottom, green)
 
 Shows messages like "Skipping unreadable file: …", "No playable files left",
 "Could not open file: …", "Output device error: …", "Output device changed —
-press Play to resume" (`src/engine/mod.rs:779, 789, 1112, 1131, 1195`). It is
-**never cleared once set** — the last message stays until the window closes.
+press Play to resume" (`src/engine/mod.rs:1158`, `1176`, `834`, `824`,
+`1241`). It **clears on the next track change, Play, or open command**
+(`src/ui.rs:483`, `501`, `519`, `721`, `727`) — the message no longer sticks
+around until exit.
 
 ---
 
 ## 3. Keyboard shortcuts
 
-One handler for the whole window (`ui/main.slint:170-208`):
+One handler for the whole window (`ui/main.slint:416-447`):
 
 | Key | Action |
 |---|---|
@@ -123,19 +154,34 @@ One handler for the whole window (`ui/main.slint:170-208`):
 | `N` | Next track |
 | `P` | Previous track (with the >5 s restart rule) |
 | `[` / `]` | Speed down / up one segment |
+| `V` | Cycle the visualizer: Off → Line → Pulsar → Off |
+| `?` / `F1` | Toggle the Help overlay |
 | `Ctrl+O` | Open file dialog |
 | `Ctrl+Shift+O` | Open folder dialog |
 | `Esc` | Close the Help overlay (all keys are ignored while Help is open) |
 
+### Help overlay
+
+Open with the top-row `?` button, the `?` key, or `F1`
+(`ui/main.slint:433-434`, `476-479`). Close with `Esc`, `F1`, `?`, the
+round close button, or a click on the dim backdrop — a click **inside the
+panel no longer closes it** (`ui/main.slint:732`, `744`, `770-772`). While
+it is open the overlay is modal: every other key is rejected
+(`ui/main.slint:417-424`). The panel lists **Playback**, **Speed**, **Files**
+and **View** groups with key caps, and carries a footer with the version
+("Q-pid 1.2.0 PULSAR") plus, on Windows, the media-key note
+(`ui/main.slint:750-1007`; strings set once at startup in
+`src/ui.rs:469-475`).
+
 Deliberate non-actions:
 
 - **Plain `O` does nothing** — the chord is checked with the Ctrl modifier
-  required (`ui/main.slint:189`).
+  required (`ui/main.slint:425-431`).
 - **Other Ctrl/Alt combos do nothing** (`Ctrl+N`, `Ctrl+Space`, `Alt+←`…):
   chords are evaluated first and rejected before the plain-letter arms
-  (`ui/main.slint:189-199`).
+  (`ui/main.slint:435-437`).
 - Caveat: `Shift+N` still triggers Next (the key text becomes `"N"` and the
-  match is case-insensitive, `ui/main.slint:203`).
+  match is case-insensitive, `ui/main.slint:441`).
 
 ### Media keys
 
@@ -150,22 +196,24 @@ work system-wide while q-pid is open.
 
 ## 4. The seek slider in detail
 
-Custom slider (`ui/main.slint:69-125`), because the stock Slint slider
+Custom slider (`ui/main.slint:271-345`), because the stock Slint slider
 can't expose drag state:
 
+- **Thumb** — a 14 px light circle rides the end of the green fill, shown
+  only while the slider is enabled (`ui/main.slint:304-312`).
 - **Press and drag** — the green bar follows your pointer (`dragging`
-  state); the 500 ms engine refresh is guarded so **the engine cannot yank
-  the bar out from under your finger** (`src/ui.rs:155-158`). The elapsed
+  state); the engine refresh is guarded so **the engine cannot yank
+  the bar out from under your finger** (`src/ui.rs:584-592`). The elapsed
   time text keeps ticking during the drag.
 - **Release** — one `commit` fires and the seek happens
-  (`ui/main.slint:118-120`); the bar immediately jumps to your release point
-  and doesn't snap back while the engine catches up (`src/ui.rs:237-253`).
+  (`ui/main.slint:330-341`); the bar immediately jumps to your release point
+  and doesn't snap back while the engine catches up (`src/ui.rs:563-581`).
 - **Plain click** (press+release in place) = seek to that point — not a no-op.
-- **Duration unknown** → the slider is **dimmed to 40% and completely inert**
-  (all pointer input blocked, `ui/main.slint:82, 95`) while the elapsed
-  clock still shows.
-- Right/middle mouse buttons are ignored (`ui/main.slint:100-102`).
-- Targets are clamped to duration − 1 s (`src/engine/mod.rs:617-622`).
+- **Duration unknown** → the slider **dims to the accent-dim token and goes
+  inert**: all pointer input is blocked (`ui/main.slint:315`) and the thumb
+  disappears (`ui/main.slint:305`), while the elapsed clock still shows.
+- Right/middle mouse buttons are ignored (`ui/main.slint:320-322`).
+- Targets are clamped to duration − 1 s (`src/engine/mod.rs:662-667`).
 
 ---
 
@@ -175,24 +223,26 @@ can't expose drag state:
   resampler to save resources (**0 % CPU** while parked, BENCH.md,
   "paused-over-10s").
   Pressing Play reopens the file **at the exact position you paused**
-  (`src/engine/mod.rs:1248-1253`). Seeking while paused just moves the saved
+  (`src/engine/mod.rs:1277-1307`). Seeking while paused just moves the saved
   resume position.
 - **End of a mid-playlist track** → auto-advances to the next file with
-  essentially no gap (<100 ms, `src/engine/mod.rs:369-397`).
+  essentially no gap (<100 ms, `src/engine/mod.rs:406-416`).
 - **End of the last track** → the play button flips back to `>`; after 10 s
-  the stream is released like a long pause; pressing **Play restarts the
-  file from 0:00** (`src/engine/mod.rs:388-396, 1144-1169`).
-- **Autosaves** happen on: pause, next, previous, open, speed change, exit,
+  the stream is released like a long pause (`src/engine/mod.rs:1309`);
+  pressing **Play restarts the
+  file from 0:00** (`src/engine/mod.rs:552-558`, `1189-1215`).
+- **Autosaves** happen on: pause, next, previous, open, speed change,
+  visualizer change, exit,
   error, and every 30 s while playing (`IMPLEMENTATION.md:62-73`). Worst-case
   position loss after a crash is ~30 s.
 - **Minimized or covered window** → the on-screen clock and slider **freeze**
-  (the UI timer stops, `src/ui.rs:104-120`) while audio keeps playing;
+  (the UI timer stops, `src/ui.rs:370-395`) while audio keeps playing;
   restoring the window resumes updates. Same freeze while paused.
 - **Session restore detail**: if the file changed size since the save
   (e.g. re-downloaded), the saved position is discarded and you start at 0
-  (`src/store.rs:137-144`).
+  (`src/store.rs:141-148`).
 - Unreadable files are skipped with a status message; if nothing playable
-  remains you get **"No playable files left"** (`src/engine/mod.rs:1111-1133`).
+  remains you get **"No playable files left"** (`src/engine/mod.rs:1158-1176`).
 
 ---
 
@@ -222,13 +272,10 @@ the app does (`src/main.rs:75-82`).
 
 ## 7. Known quirks / limitations
 
-1. **Speed row desync after restore** — shows 1x while audio may run at the
-   saved speed; click a segment to resync.
-2. **Filename-only track titles** — no ID3 tags, no cover art.
-3. **Status line never clears** — last green message persists.
-4. **No seek into the final second** (clamp at duration − 1 s).
-5. **Light/dark theme switch** not available yet (dark only).
-6. `Shift+N` triggers Next (case-insensitive key match).
+1. **Filename-only track titles** — no ID3 tags, no cover art.
+2. **No seek into the final second** (clamp at duration − 1 s).
+3. **Light/dark theme switch** not available yet (dark only).
+4. `Shift+N` triggers Next (case-insensitive key match).
 
 ---
 

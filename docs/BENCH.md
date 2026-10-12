@@ -16,7 +16,7 @@ Phase 6 final measurements: see `## Phase 6 final table — v1.0.0 (2026-10-05/0
 
 | # | Budget | Target | Result | Verdict |
 |---|--------|--------|--------|---------|
-| 1 | Exe size | ≤ 10 MB | **10,452,992 B (9.97 MB)** — Phase 5 final build (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B**); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Phase 4 Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 10,485,760) |
+| 1 | Exe size | ≤ 11,031,024 B (10.52 MiB) — PULSAR cap, raised for the Slint Path rasterizer (architecture.md budget 1) | **v1.2.0 current: 10,630,144 B (10.14 MiB, margin 400,880 B)** — PULSAR T5 build (2026-10-11); history: Phase 5 final was 10,452,992 B (2026-10-05 branch-review release: slint help text + mutex fixes; margin **32,768 B** vs the old cap); Phase 4 was 10,418,176 B (after the rule-10 debug guard; Phase 4 Task 6 measured 10,419,200 B before it); Phase 3 was 10,443,264 B, Phase 2 was 10,379,776 B | **PASS** (cap 11,031,024; old cap 10,485,760) |
 | 2 | Startup to first frame | ≤ 300 ms | 141 ms median (5 runs; first cold run 329, warm 134–248) — **not re-run for Phase 3 or 4** | **PASS** |
 | 3 | USS, visible, 1x | ≤ 25 MB | 5.48 MB — Phase 4 re-measure with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-visible.csv`); Phase 0 was 3.35 MB | **PASS** |
 | 4 | USS, minimized, 1x | ≤ 15 MB | **Phase 5 (2026-10-05): 4.97 MB without trim — official for Phase 5 (superseded by the Phase 6 final table), 300 s, `QPID_NO_TRIM=1` (`bench_results/p5-t1-notrim`); 2.10 MB with trim armed — info only, 60 s (`bench_results/p5-t1-trim`), −58% USS**; Phase 4: 5.86 MB fresh UI re-run with the 500 ms timer active (2026-10-04, `bench_results/playing-1x-minimized.csv`; earlier 5.34/5.24 report-only); Phase 0 was 5.39 MB | **PASS** |
@@ -531,3 +531,11 @@ Cap for this release: **11,031,024 B** (10.52 MiB, raised from 10,485,760 - see 
 | T1 tokens/icons/controls | 10,493,440 | 7 | 35 | 2026-10-11 |
 | T2 layout/folder/empty/status | 10,511,360 | 7 | 37 | 2026-10-11 |
 | T3 help/keys/footer | 10,599,936 | 7 | 37 | 2026-10-11 |
+| T4 settings/viz-control | 10,619,904 | 7 | 41 | 2026-10-11 |
+| T5 tap/render/timer | 10,630,144 | 7 | 47 | 2026-10-11 |
+
+Current (T5, 2026-10-11): exe **10,630,144 B** ≤ 11,031,024 **PASS**, release
+warnings **7**, `cargo test` **47**. Budget 10 (visualizer on), the 30-minute
+viz-on soak, and budgets 3/4 with the visualizer on are **not yet measured** —
+pending the controller's live gates; this section will be closed with those
+numbers.
