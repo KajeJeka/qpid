@@ -520,3 +520,14 @@ Ear-only criteria — not automatable; report results back to the user.
   "Output device changed" message, then resumes on Play. (Phase 5 human
   unplug gate already **PASS 2026-10-05**; automated path 3/3 in
   task-15-report.md.)
+
+## v1.2.0 task trail - PULSAR (2026-10-11)
+
+Cap for this release: **11,031,024 B** (10.52 MiB, raised from 10,485,760 - see architecture.md budget 1 for the Path-rasterizer rationale). Warnings baseline 7, tests baseline 35.
+
+| task | exe bytes | warnings | tests | date |
+|---|---|---|---|---|
+| T0 spec sync | 10,453,504 | 7 | 35 | 2026-10-11 |
+| T1 tokens/icons/controls | 10,493,440 | 7 | 35 | 2026-10-11 |
+| T2 layout/folder/empty/status | 10,511,360 | 7 | 37 | 2026-10-11 |
+| T3 help/keys/footer | 10,599,936 | 7 | 37 | 2026-10-11 |
