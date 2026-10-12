@@ -23,7 +23,7 @@ Priority order for every decision:
 
 Measured on Windows 11 x64, release build, one 44.1 kHz stereo MP3 at 128 kbps, after 60 s of playback.
 
-1. Exe size: 11,031,024 B (10.52 MiB) or less. (Raised from 10 MB for PULSAR: the Slint software renderer links a one-time ~34 KB path rasterizer the first time a `Path` element is used — measured 2026-10-11, 10,493,440 B with Path icons vs 10,459,648 without. Old 10 MB cap = 10,485,760 B.)
+1. Exe size: 11,031,024 B (10.52 MiB) or less. (Raised from the previous cap for PULSAR: the Slint software renderer links a one-time ~34 KB path rasterizer the first time a `Path` element is used — measured 2026-10-11, 10,493,440 B with Path icons vs 10,459,648 without. Old cap = 10,485,760 B.)
 2. Startup to first frame: 300 ms or less.
 3. Private working set, window visible, playing at 1x: 25 MB or less.
 4. Private working set, window minimized, playing at 1x: 15 MB or less. Measure without the working set trim from section 11. The trim must not be used to pass this budget.
@@ -300,7 +300,7 @@ Layout, top to bottom, 20 px outer padding, 8 px spacing grid, heights in px (no
 3b. Visualizer strip: present only when the visualizer mode is not Off. Turning it on or off changes the window height by 80 px (72 px strip plus 8 px gap); Line to Pulsar does not resize.
 4. Seek control: touch height 24 px, track 6 px high, centered, radius 3, divider color, accent fill. Thumb: 14 px circle, text-primary, centered on the fill end, shown only when the control is enabled. The 24 px touch height is the deliberate exception to the 40 px rule, the control spans the full width. All pointer logic in `SeekSlider` stays as it is; only the drawing changes. Times row below: elapsed on the left in text-primary, duration on the right in text-muted, both 11 px, so digit width changes move nothing. Format `H:MM:SS`, or `M:SS` under one hour.
 5. Transport row: centered, 10 px between items. Previous and Next: 44 px round, no fill, 20 px `Path` icon, hover surface-hover. Back and forward 15: pill buttons 40 px tall, min width 48, surface fill, 1 px divider border, 13 px, semibold, text `-15` and `+15`. Play and pause: 64 px circle, accent fill, 26 px `Path` icon in accent text. The icon swaps between play and pause.
-6. Speed control: one pill container, surface fill, 1 px divider border, radius 17, 3 px padding. Five equal cells, 56 x 26, radius 13. Active cell: accent fill, semibold. Inactive: text-muted. Container width is 288 px. Labels: 0.5x, 1x, 1.25x, 1.5x, 2x.
+6. Speed control: one pill container, surface fill, 1 px divider border, radius 17, 3 px padding. Five equal cells, 56 x 26, radius 13. Active cell: accent fill, accent text, semibold. Inactive: text-muted. Container width is 288 px. Labels: 0.5x, 1x, 1.25x, 1.5x, 2x.
 7. Status line: always reserved, no layout jump. Empty by default. Shows `Message` text such as an unreadable file. Clear it on the next `TrackChanged`, `Play` or open command.
 
 Empty state: when there is no track, rows 2 and 3 are replaced by one card of the same total height (52 px): surface-sunken fill, 1 px divider border, radius 8, a folder icon and "Drop a folder or file here, or press Open" in 13 px text-muted, centered. Seek, transport and speed stay in place with the dim tokens, so nothing moves when a track loads.
@@ -396,7 +396,7 @@ opt-level = "s"
 opt-level = 3
 ```
 
-The app crate is size optimized, and so are the dependencies: the 10 MB exe budget binds before dependency speed — decode plus resample stay well under one core at 1x (measured, see `BENCH.md`). rustfft is the exception at -O3 because it carries the resampler and costs only ~8 KB after LTO.
+The app crate is size optimized, and so are the dependencies: the exe budget binds before dependency speed — decode plus resample stay well under one core at 1x (measured, see `BENCH.md`). rustfft is the exception at -O3 because it carries the resampler and costs only ~8 KB after LTO.
 
 `.cargo/config.toml`:
 
@@ -447,7 +447,7 @@ Do not start a phase before the previous exit criteria pass.
 
 ### Phase 4: UI
 
-1. Wire `Command`, `Event` and the 500 ms timer.
+1. Wire `Command`, `Event` and the sanctioned timer.
 2. Buttons, slider, speed control, dialogs, keyboard, command line argument.
 3. Exit: every control works. Timer stops while minimized and while paused. Budgets 3 and 4 pass.
 

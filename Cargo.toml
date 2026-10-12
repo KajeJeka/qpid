@@ -50,7 +50,7 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
-# Dependencies are size-optimized: the exe-size budget (10 MB) binds harder
+# Dependencies are size-optimized: the exe-size budget binds harder
 # than dependency speed — decode/resample are far from saturating one core
 # at 1x (see architecture.md section 14; re-check the 2x CPU budget if this
 # ever regresses).

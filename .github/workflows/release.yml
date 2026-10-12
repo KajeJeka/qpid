@@ -22,7 +22,7 @@ jobs:
           if ($warn -gt 7) { exit 1 }
           $size = (Get-Item target\release\qpid.exe).Length
           Write-Host "exe size: $size"
-          if ($size -gt 10485760) { exit 1 }
+          if ($size -gt 11031024) { exit 1 }
       - run: Copy-Item target\release\qpid.exe "qpid-${env:GITHUB_REF_NAME}-windows-x86_64.exe"
       - uses: actions/upload-artifact@v4
         with: { name: windows, path: "qpid-*-windows-x86_64.exe" }
