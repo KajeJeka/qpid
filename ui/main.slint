@@ -167,6 +167,50 @@ component PillButton inherits Rectangle {
     }
 }
 
+// 14 px stroked folder glyph (design 6). Shared by the folder row and the
+// empty-state card.
+component FolderIcon inherits Path {
+    width: 14px;
+    height: 14px;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    stroke: Tokens.text-muted;
+    stroke-width: 1.6px;
+    commands: "M 3 7 A 2 2 0 0 1 5 5 L 9 5 L 11 7 L 19 7 A 2 2 0 0 1 21 9 L 21 17 A 2 2 0 0 1 19 19 L 5 19 A 2 2 0 0 1 3 17 Z";
+}
+
+// Flat 36 px open button (design 5.1): surface fill, divider border,
+// radius 8, 12 px text, 14 px side padding, 40 px hit area via overflow.
+component OpenButton inherits Rectangle {
+    in property <string> label;
+    callback clicked <=> area.clicked;
+
+    height: 36px;
+    border-radius: Tokens.radius;
+    border-width: 1px;
+    border-color: Tokens.divider;
+    background: area.pressed ? Tokens.divider
+        : area.has-hover ? Tokens.surface-hover : Tokens.surface;
+
+    area := TouchArea {
+        y: -2px;
+        width: 100%;
+        height: 40px;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        Text {
+            text: root.label;
+            color: Tokens.text-primary;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // One cell of the speed pill (design 5.5).
 component SpeedCell inherits Rectangle {
     in property <string> label;
@@ -284,7 +328,7 @@ export component MainWindow inherits Window {
     preferred-width: 480px;
     preferred-height: 320px;
     min-width: 400px;
-    min-height: 280px;
+    min-height: 320px;
 
     forward-focus: keys;
 
@@ -364,130 +408,150 @@ export component MainWindow inherits Window {
         }
 
         VerticalBox {
-            padding: 20px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+            padding-left: 20px;
+            padding-right: 20px;
             spacing: 8px;
 
-            // Top row: open buttons
+            // Top row (design 5.1): open buttons left, help right.
+            // 40px hit area, controls vertically centered in 36px visual.
             HorizontalBox {
                 padding: 0px;
                 spacing: 8px;
                 alignment: start;
 
-                Rectangle {
-                    width: 90px;
-                    height: Tokens.button-height;
-                    border-radius: Tokens.radius;
-                    background: open-file-touch.pressed ? Tokens.divider
-                        : open-file-touch.has-hover ? Tokens.surface-hover : Tokens.surface;
-                    border-width: 1px;
-                    border-color: Tokens.divider;
-                    open-file-touch := TouchArea {
-                        y: -2px;
-                        width: 100%;
-                        height: 40px;
-                        clicked => { root.open-file(); }
-                    }
-                    Text {
-                        text: "Open file";
-                        color: Tokens.text-primary;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                OpenButton {
+                    label: "Open file";
+                    clicked => { root.open-file(); }
                 }
-
-                Rectangle {
-                    width: 100px;
-                    height: Tokens.button-height;
-                    border-radius: Tokens.radius;
-                    background: open-folder-touch.pressed ? Tokens.divider
-                        : open-folder-touch.has-hover ? Tokens.surface-hover : Tokens.surface;
-                    border-width: 1px;
-                    border-color: Tokens.divider;
-                    open-folder-touch := TouchArea {
-                        y: -2px;
-                        width: 100%;
-                        height: 40px;
-                        clicked => { root.open-folder(); }
-                    }
-                    Text {
-                        text: "Open folder";
-                        color: Tokens.text-primary;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                OpenButton {
+                    label: "Open folder";
+                    clicked => { root.open-folder(); }
                 }
-
+                Rectangle { horizontal-stretch: 1; }
                 IconButton {
                     icon: 1;
                     clicked => { root.show-help = !root.show-help; }
                 }
             }
 
-            // Folder name
-            Text {
-                text: root.folder-name == "" ? "" : root.folder-name;
-                color: Tokens.text-muted;
-                font-size: 12px;
-                overflow: elide;
-                horizontal-alignment: left;
-            }
-
-            // Empty state / track title row
-            if !root.has-track: Text {
-                text: "Drop a folder or file here, or press Open";
-                color: Tokens.text-muted;
-                font-size: 14px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-                height: 40px;
-            }
-
+            // Folder row (design 5.2): 14px icon + name, 16px tall.
             if root.has-track: HorizontalBox {
                 padding: 0px;
+                spacing: 6px;
+                alignment: start;
+                height: 16px;
+
+                FolderIcon {
+                    vertical-stretch: 0;
+                }
+                Text {
+                    text: root.folder-name;
+                    color: Tokens.text-muted;
+                    font-size: 12px;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+            }
+
+            // Title row (design 5.2): title + counter pill, 28px.
+            if root.has-track: HorizontalBox {
+                padding: 0px;
+                spacing: 8px;
+                alignment: start;
+                height: 28px;
+
                 Text {
                     text: root.track-title;
                     color: Tokens.text-primary;
-                    font-size: 18px;
+                    font-size: 20px;
                     font-weight: 600;
                     overflow: elide;
                     horizontal-stretch: 1;
-                }
-                Text {
-                    text: root.track-index + " / " + root.track-count;
-                    color: Tokens.text-muted;
-                    font-size: 12px;
                     vertical-alignment: center;
+                }
+                Rectangle {
+                    height: 18px;
+                    border-radius: 999px;
+                    border-width: 1px;
+                    border-color: Tokens.divider;
+                    background: Tokens.surface;
+
+                    HorizontalLayout {
+                        padding-left: 9px;
+                        padding-right: 9px;
+                        padding-top: 2px;
+                        padding-bottom: 2px;
+                        Text {
+                            text: root.track-index + " / " + root.track-count;
+                            color: Tokens.text-muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
             }
 
-            // Seek row
-            HorizontalBox {
-                padding: 0px;
-                spacing: 8px;
-                Text {
-                    text: root.elapsed-text;
-                    color: Tokens.text-muted;
-                    font-size: 11px;
-                    vertical-alignment: center;
+            // Empty state (design 5.6): 52px card replaces folder+title rows.
+            if !root.has-track: Rectangle {
+                height: 52px;
+                background: Tokens.surface-sunken;
+                border-width: 1px;
+                border-color: Tokens.divider;
+                border-radius: Tokens.radius;
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
+
+                    FolderIcon {
+                        vertical-stretch: 0;
+                    }
+                    Text {
+                        text: "Drop a folder or file here, or press Open";
+                        color: Tokens.text-muted;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
                 }
+            }
+
+            // Seek control (24px) full width + times row below (14px).
+            VerticalBox {
+                padding: 0px;
+                spacing: 4px;
+
                 SeekSlider {
-                    horizontal-stretch: 1;
+                    height: 24px;
                     fraction: root.seek-fraction;
                     enabled: root.seek-enabled;
                     dragging(changed) => { root.seek-dragging(changed); }
                     commit(value) => { root.seek-to(value); }
                 }
-                Text {
-                    text: root.duration-text;
-                    color: Tokens.text-muted;
-                    font-size: 11px;
-                    vertical-alignment: center;
+                HorizontalBox {
+                    padding: 0px;
+                    height: 14px;
+                    Text {
+                        text: root.elapsed-text;
+                        color: Tokens.text-primary;
+                        font-size: 11px;
+                        horizontal-alignment: left;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: root.duration-text;
+                        color: Tokens.text-muted;
+                        font-size: 11px;
+                        horizontal-alignment: right;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
                 }
             }
 
-            // Transport row
+            // Transport row (design 5.4)
             HorizontalBox {
                 padding: 0px;
                 spacing: 10px;
@@ -513,7 +577,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Speed row: one pill container (design 5.5)
+            // Speed pill row (design 5.5)
             HorizontalBox {
                 padding: 0px;
                 spacing: 4px;
@@ -565,12 +629,14 @@ export component MainWindow inherits Window {
                 }
             }
 
-            // Status line
+            // Status line (design 5.7): always reserved 14px.
             Text {
                 text: root.status-text;
                 color: Tokens.accent;
                 font-size: 11px;
+                height: 14px;
                 horizontal-alignment: center;
+                vertical-alignment: center;
             }
         }
 

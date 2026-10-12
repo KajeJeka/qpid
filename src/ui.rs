@@ -47,6 +47,15 @@ fn clamp_step(current: i32, delta: i32) -> i32 {
     (current + delta).clamp(0, 4)
 }
 
+/// Design §5.2: folder row shows the last path component only; a path
+/// with no file name (drive root) falls back to the full string.
+fn folder_display(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
 thread_local! {
     static TC: RefCell<Option<TimerControl>> = RefCell::new(None);
 }
@@ -161,7 +170,11 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     // Open file / open folder: the two entry points required by Phase 0/1.
     {
         let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
         window.on_open_file(move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_status_text("".into());
+            }
             let tx = cmd_tx.clone();
             std::thread::spawn(move || {
                 if let Some(path) = rfd::FileDialog::new()
@@ -175,7 +188,11 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     }
     {
         let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
         window.on_open_folder(move || {
+            if let Some(window) = weak.upgrade() {
+                window.set_status_text("".into());
+            }
             let tx = cmd_tx.clone();
             std::thread::spawn(move || {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
@@ -189,7 +206,11 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
     // type is only named inside winit_hook).
     {
         let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
         crate::winit_hook::set_drop_sink(move |path| {
+            if let Some(window) = weak.upgrade() {
+                window.set_status_text("".into());
+            }
             let _ = cmd_tx.send(Command::OpenPath(path));
         });
     }
@@ -359,15 +380,19 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
                         count,
                         duration_ms: _,
                     } => {
-                        window.set_folder_name(folder.into());
+                        window.set_folder_name(folder_display(&folder).into());
                         window.set_track_title(title.into());
                         window.set_track_index(index as i32);
                         window.set_track_count(count as i32);
                         window.set_has_track(true);
+                        window.set_status_text("".into());
                     }
                     Event::StateChanged(state) => {
                         let playing = matches!(state, crate::engine::PlayState::Playing);
                         window.set_is_playing(playing);
+                        if playing {
+                            window.set_status_text("".into());
+                        }
                         with_tc(|tc| {
                             if let Some(t) = tc {
                                 t.set_playing(playing);
@@ -397,6 +422,7 @@ mod tests {
     use super::format_time;
     use super::fraction_to_ms;
     use super::clamp_step;
+    use super::folder_display;
 
     #[test]
     fn clamp_step_steps_within_range() {
@@ -479,5 +505,17 @@ mod tests {
     #[test]
     fn format_time_long_track() {
         assert_eq!(format_time(36_000_000), "10:00:00");
+    }
+
+    #[test]
+    fn folder_display_last_component() {
+        assert_eq!(folder_display(r"C:\Music\Book One"), "Book One");
+        assert_eq!(folder_display("/home/u/albums"), "albums");
+    }
+
+    #[test]
+    fn folder_display_root_falls_back_to_full() {
+        assert_eq!(folder_display(r"C:\"), r"C:\");
+        assert_eq!(folder_display("/"), "/");
     }
 }
