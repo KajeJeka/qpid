@@ -13,53 +13,176 @@ global Tokens {
     out property <color> accent: #3ab814;
     out property <color> accent-text: #0b0d0a;
     out property <color> divider: #23281c;
+    out property <color> surface-sunken: #0f120d;
+    out property <color> surface-hover: #1b2015;
+    out property <color> text-dim: #5f655b;
+    out property <color> accent-hover: #4acb22;
+    out property <color> accent-dim: #1e510e;
 
     out property <length> radius: 8px;
     out property <length> button-height: 36px;
     out property <length> hit-min: 40px;
 }
 
-component TransportButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> primary: false;
-    in property <length> diameter: 40px;
+// Round 36 px icon button (design 5.1). The TouchArea reaches 40 px via a
+// 2 px unclipped overflow on every side, meeting the 40 px hit-area rule.
+component IconButton inherits Rectangle {
+    in property <int> icon: 0; // 0=wave 1=help
     callback clicked <=> area.clicked;
 
-    width: diameter;
-    height: diameter;
-    border-radius: primary ? self.width / 2 : Tokens.radius;
-    background: primary ? Tokens.accent : Tokens.surface;
+    width: 36px;
+    height: 36px;
+    border-radius: 18px;
+    border-width: 1px;
+    border-color: Tokens.divider;
+    background: area.pressed ? Tokens.divider
+        : area.has-hover ? Tokens.surface-hover : transparent;
+
+    area := TouchArea {
+        x: -2px;
+        y: -2px;
+        width: parent.width + 4px;
+        height: parent.height + 4px;
+    }
+
+    if root.icon == 0: Path {
+        x: 6px;
+        y: 6px;
+        width: 24px;
+        height: 24px;
+        stroke: area.has-hover ? Tokens.text-primary : Tokens.text-muted;
+        stroke-width: 1.8px;
+        commands: "M 3 12 L 6 12 L 8 6 L 11 18 L 14 9 L 16 14 L 18 12 L 21 12";
+    }
+    if root.icon == 1: Text {
+        text: "?";
+        color: area.has-hover ? Tokens.text-primary : Tokens.text-muted;
+        font-size: 14px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
+    }
+}
+
+// Transport glyph button (design 5.4/6): 44 px round with a 20 px fill
+// glyph, or the 64 px accent play/pause circle with a 26 px glyph.
+component GlyphButton inherits Rectangle {
+    in property <int> icon: 0; // 0=prev 1=next 2=play 3=pause
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked <=> area.clicked;
+
+    property <length> d: root.primary ? 64px : 44px;
+    property <length> g: root.primary ? 26px : 20px;
+    property <brush> glyph: root.primary ? Tokens.accent-text
+        : root.enabled ? Tokens.text-primary : Tokens.text-dim;
+
+    width: d;
+    height: d;
+    border-radius: d / 2;
+    background: root.primary
+        ? (!root.enabled ? Tokens.accent-dim
+            : area.has-hover ? Tokens.accent-hover : Tokens.accent)
+        : area.has-hover ? Tokens.surface-hover : transparent;
+
+    area := TouchArea {
+        enabled: root.enabled;
+    }
+
+    if root.icon == 0: Path {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: g;
+        height: g;
+        fill: root.glyph;
+        commands: "M 5 5 L 7.6 5 L 7.6 19 L 5 19 Z M 19 6 L 19 18 L 9.5 12 Z";
+    }
+    if root.icon == 1: Path {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: g;
+        height: g;
+        fill: root.glyph;
+        commands: "M 16.4 5 L 19 5 L 19 19 L 16.4 19 Z M 5 6 L 5 18 L 14.5 12 Z";
+    }
+    if root.icon == 2: Path {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: g;
+        height: g;
+        fill: root.glyph;
+        commands: "M 8 5.5 L 8 18.5 L 19 12 Z";
+    }
+    if root.icon == 3: Path {
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: g;
+        height: g;
+        fill: root.glyph;
+        commands: "M 6.5 5 L 10.3 5 L 10.3 19 L 6.5 19 Z M 13.7 5 L 17.5 5 L 17.5 19 L 13.7 19 Z";
+    }
+}
+
+// Text pill (design 5.4): 40 px tall, 48 min width, surface fill.
+component PillButton inherits Rectangle {
+    in property <string> label;
+    callback clicked <=> area.clicked;
+
+    height: 40px;
+    min-width: 48px;
+    border-radius: Tokens.radius;
+    border-width: 1px;
+    border-color: Tokens.divider;
+    background: area.pressed ? Tokens.divider
+        : area.has-hover ? Tokens.surface-hover : Tokens.surface;
 
     area := TouchArea { }
 
     Text {
-        text: label;
-        color: primary ? Tokens.accent-text : Tokens.text-primary;
-        font-size: primary ? 20px : 14px;
+        text: root.label;
+        color: Tokens.text-primary;
+        font-size: 13px;
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
     }
 }
 
-component SpeedSegment inherits Rectangle {
+// One cell of the speed pill (design 5.5).
+component SpeedCell inherits Rectangle {
     in property <string> label;
     in property <bool> active: false;
     callback clicked <=> area.clicked;
 
-    height: 28px;
-    border-radius: 6px;
-    background: active ? Tokens.accent : transparent;
+    width: 56px;
+    height: 26px;
+    border-radius: 13px;
+    background: root.active ? Tokens.accent
+        : area.pressed ? Tokens.divider
+        : area.has-hover ? Tokens.surface-hover : transparent;
 
     area := TouchArea { }
 
     Text {
-        text: label;
-        color: active ? Tokens.accent-text : Tokens.text-muted;
+        text: root.label;
+        color: root.active ? Tokens.accent-text
+            : area.has-hover ? Tokens.text-primary : Tokens.text-muted;
         font-size: 12px;
-        font-weight: active ? 600 : 400;
+        font-weight: root.active ? 600 : 400;
         horizontal-alignment: center;
         vertical-alignment: center;
+        x: 0;
+        y: 0;
+        width: 100%;
+        height: 100%;
     }
 }
 
@@ -76,19 +199,37 @@ component SeekSlider inherits Rectangle {
     private property <bool> is-dragging: false;
     private property <float> shown: root.is-dragging ? root.drag-value : root.fraction;
 
-    height: 16px;
-    background: Tokens.divider;
-    border-radius: 4px;
-    opacity: root.enabled ? 1.0 : 0.4;
+    height: 24px;
+    background: transparent;
 
-    // Fill
+    // Track: 6 px, centered, radius 3, divider
     Rectangle {
         x: 0;
-        y: 0;
+        y: (parent.height - 6px) / 2;
+        width: parent.width;
+        height: 6px;
+        border-radius: 3px;
+        background: Tokens.divider;
+    }
+
+    // Fill: accent (accent-dim when disabled)
+    Rectangle {
+        x: 0;
+        y: (parent.height - 6px) / 2;
         width: parent.width * root.shown;
-        height: parent.height;
-        background: Tokens.accent;
-        border-radius: 4px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.enabled ? Tokens.accent : Tokens.accent-dim;
+    }
+
+    // Thumb: 14 px circle on the fill end, only while enabled
+    if root.enabled: Rectangle {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: Tokens.text-primary;
+        x: parent.width * root.shown - self.width / 2;
+        y: (parent.height - self.height) / 2;
     }
 
     touch := TouchArea {
@@ -225,10 +366,16 @@ export component MainWindow inherits Window {
                     width: 90px;
                     height: Tokens.button-height;
                     border-radius: Tokens.radius;
-                    background: Tokens.surface;
+                    background: open-file-touch.pressed ? Tokens.divider
+                        : open-file-touch.has-hover ? Tokens.surface-hover : Tokens.surface;
                     border-width: 1px;
                     border-color: Tokens.divider;
-                    TouchArea { clicked => { root.open-file(); } }
+                    open-file-touch := TouchArea {
+                        y: -2px;
+                        width: 100%;
+                        height: 40px;
+                        clicked => { root.open-file(); }
+                    }
                     Text {
                         text: "Open file";
                         color: Tokens.text-primary;
@@ -242,10 +389,16 @@ export component MainWindow inherits Window {
                     width: 100px;
                     height: Tokens.button-height;
                     border-radius: Tokens.radius;
-                    background: Tokens.surface;
+                    background: open-folder-touch.pressed ? Tokens.divider
+                        : open-folder-touch.has-hover ? Tokens.surface-hover : Tokens.surface;
                     border-width: 1px;
                     border-color: Tokens.divider;
-                    TouchArea { clicked => { root.open-folder(); } }
+                    open-folder-touch := TouchArea {
+                        y: -2px;
+                        width: 100%;
+                        height: 40px;
+                        clicked => { root.open-folder(); }
+                    }
                     Text {
                         text: "Open folder";
                         color: Tokens.text-primary;
@@ -255,21 +408,9 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
-                    width: 60px;
-                    height: Tokens.button-height;
-                    border-radius: Tokens.radius;
-                    background: Tokens.surface;
-                    border-width: 1px;
-                    border-color: Tokens.divider;
-                    TouchArea { clicked => { root.show-help = !root.show-help; } }
-                    Text {
-                        text: "Help";
-                        color: Tokens.text-primary;
-                        font-size: 12px;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                IconButton {
+                    icon: 1;
+                    clicked => { root.show-help = !root.show-help; }
                 }
             }
 
@@ -338,32 +479,79 @@ export component MainWindow inherits Window {
             // Transport row
             HorizontalBox {
                 padding: 0px;
-                spacing: 12px;
+                spacing: 10px;
                 alignment: center;
 
-                TransportButton { label: "|<"; clicked => { root.prev-track(); } }
-                TransportButton { label: "-15"; clicked => { root.seek-back(); } }
-                TransportButton {
-                    label: root.is-playing ? "||" : ">";
+                GlyphButton {
+                    icon: 0;
+                    enabled: root.has-track;
+                    clicked => { root.prev-track(); }
+                }
+                PillButton { label: "-15"; clicked => { root.seek-back(); } }
+                GlyphButton {
+                    icon: root.is-playing ? 3 : 2;
                     primary: true;
-                    diameter: 56px;
+                    enabled: root.has-track;
                     clicked => { root.toggle-play(); }
                 }
-                TransportButton { label: "+15"; clicked => { root.seek-forward(); } }
-                TransportButton { label: ">|"; clicked => { root.next-track(); } }
+                PillButton { label: "+15"; clicked => { root.seek-forward(); } }
+                GlyphButton {
+                    icon: 1;
+                    enabled: root.has-track;
+                    clicked => { root.next-track(); }
+                }
             }
 
-            // Speed row
+            // Speed row: one pill container (design 5.5)
             HorizontalBox {
                 padding: 0px;
                 spacing: 4px;
                 alignment: center;
 
-                SpeedSegment { label: "0.5x"; active: root.speed-index == 0; clicked => { root.set-speed(0); } }
-                SpeedSegment { label: "1x";   active: root.speed-index == 1; clicked => { root.set-speed(1); } }
-                SpeedSegment { label: "1.25x";active: root.speed-index == 2; clicked => { root.set-speed(2); } }
-                SpeedSegment { label: "1.5x"; active: root.speed-index == 3; clicked => { root.set-speed(3); } }
-                SpeedSegment { label: "2x";   active: root.speed-index == 4; clicked => { root.set-speed(4); } }
+                Rectangle {
+                    width: 288px;
+                    height: 34px;
+                    border-radius: 17px;
+                    border-width: 1px;
+                    border-color: Tokens.divider;
+                    background: Tokens.surface;
+
+                    SpeedCell {
+                        x: 4px;
+                        y: 4px;
+                        label: "0.5x";
+                        active: root.speed-index == 0;
+                        clicked => { root.set-speed(0); }
+                    }
+                    SpeedCell {
+                        x: 60px;
+                        y: 4px;
+                        label: "1x";
+                        active: root.speed-index == 1;
+                        clicked => { root.set-speed(1); }
+                    }
+                    SpeedCell {
+                        x: 116px;
+                        y: 4px;
+                        label: "1.25x";
+                        active: root.speed-index == 2;
+                        clicked => { root.set-speed(2); }
+                    }
+                    SpeedCell {
+                        x: 172px;
+                        y: 4px;
+                        label: "1.5x";
+                        active: root.speed-index == 3;
+                        clicked => { root.set-speed(3); }
+                    }
+                    SpeedCell {
+                        x: 228px;
+                        y: 4px;
+                        label: "2x";
+                        active: root.speed-index == 4;
+                        clicked => { root.set-speed(4); }
+                    }
+                }
             }
 
             // Status line
