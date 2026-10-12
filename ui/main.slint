@@ -24,6 +24,30 @@ global Tokens {
     out property <length> hit-min: 40px;
 }
 
+component KeyCap inherits Rectangle {
+    in property <string> label;
+
+    height: 20px;
+    min-width: 22px;
+    border-radius: 6px;
+    background: Tokens.bg;
+    border-width: 1px;
+    border-color: Tokens.divider;
+
+    HorizontalLayout {
+        padding-left: 7px;
+        padding-right: 7px;
+        Text {
+            text: root.label;
+            color: Tokens.text-primary;
+            font-size: 11px;
+            font-weight: 600;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // Round 36 px icon button (design 5.1). The TouchArea reaches 40 px via a
 // 2 px unclipped overflow on every side, meeting the 40 px hit-area rule.
 component IconButton inherits Rectangle {
@@ -353,6 +377,8 @@ export component MainWindow inherits Window {
     // Help overlay: pure-slint state (button, backdrop and Esc all write it
     // directly) — no Rust wiring, no callback round-trip.
     property <bool> show-help: false;
+    in property <string> help-version: "Q-pid";
+    in property <string> help-media-note: "";
 
     // ---- commands to Rust (Phase 4 wires these; no-ops in Phase 0/1) ----
     callback open-file();
@@ -378,9 +404,9 @@ export component MainWindow inherits Window {
         // Chords are checked first so Ctrl+N etc. never reach the plain
         // letter arms; everything else with a modifier is rejected.
         key-pressed(event) => {
-            // Help overlay is modal: only Esc passes through (closes it).
+            // Help overlay is modal: only Esc / ? / F1 pass (they close it).
             if (root.show-help) {
-                if (event.text == Key.Escape) {
+                if (event.text == Key.Escape || event.text == Key.F1 || event.text == "?") {
                     root.show-help = false;
                     return accept;
                 }
@@ -394,6 +420,8 @@ export component MainWindow inherits Window {
                 }
                 return accept;
             }
+            if (event.text == Key.F1) { root.show-help = !root.show-help; return accept; }
+            if (event.text == "?") { root.show-help = !root.show-help; return accept; }
             if (event.modifiers.control || event.modifiers.alt || event.modifiers.meta) {
                 return reject;
             }
@@ -641,8 +669,8 @@ export component MainWindow inherits Window {
         }
 
         // Help overlay: declared after the layout so it paints on top.
-        // Backdrop click, panel click and Esc all close it; while open the
-        // key handler rejects everything else (modal).
+        // Backdrop click and Esc / ? / F1 close it; the panel swallows its
+        // own clicks; while open the key handler rejects everything else.
         if root.show-help: Rectangle {
             x: 0;
             y: 0;
@@ -653,42 +681,278 @@ export component MainWindow inherits Window {
             TouchArea { clicked => { root.show-help = false; } }
 
             Rectangle {
-                x: 30px;
-                y: 30px;
-                width: parent.width - 60px;
-                height: parent.height - 60px;
+                x: 16px;
+                y: 16px;
+                width: parent.width - 32px;
+                height: parent.height - 32px;
                 background: Tokens.surface;
                 border-width: 1px;
                 border-color: Tokens.divider;
-                border-radius: Tokens.radius;
+                border-radius: 8px;
+
+                TouchArea { }
 
                 VerticalBox {
                     padding: 16px;
-                    spacing: 6px;
+                    spacing: 8px;
 
-                    Text {
-                        text: "Help - keyboard & buttons";
-                        color: Tokens.accent;
-                        font-size: 14px;
-                        font-weight: 600;
-                        horizontal-alignment: center;
+                    HorizontalBox {
+                        padding: 0px;
+                        height: 32px;
+                        alignment: start;
+
+                        Text {
+                            text: "Keyboard";
+                            color: Tokens.accent;
+                            font-size: 14px;
+                            font-weight: 600;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 16px;
+                            background: close-area.pressed ? Tokens.divider
+                                : close-area.has-hover ? Tokens.surface-hover : transparent;
+
+                            close-area := TouchArea {
+                                clicked => { root.show-help = false; }
+                            }
+
+                            Path {
+                                x: (parent.width - 16px) / 2;
+                                y: (parent.height - 16px) / 2;
+                                width: 16px;
+                                height: 16px;
+                                viewbox-width: 24;
+                                viewbox-height: 24;
+                                stroke: close-area.has-hover ? Tokens.text-primary : Tokens.text-muted;
+                                stroke-width: 1.8px;
+                                commands: "M 6 6 L 18 18 M 18 6 L 6 18";
+                            }
+                        }
                     }
 
-                    Text {
-                        text: "Space: play / pause\nLeft / Right: seek -15 s / +15 s\nN: next track\nP: previous track (restarts if >5 s in)\n[ / ]: speed down / up\nCtrl+O: open file\nCtrl+Shift+O: open folder\nEsc: close this help\n\nButtons: |< prev   -15 back   > play/pause   +15 fwd   >| next\nSlider: drag or click to seek (dimmed until duration is known)\nSpeed row: click a pill to set 0.5x - 2x\n\nDrop a file or folder anywhere on the window to open it\nOpening a second copy hands the file to the running window\nMedia keys: play/pause, next, previous\n\nClick anywhere to close";
-                        color: Tokens.text-primary;
-                        font-size: 11px;
-                        horizontal-alignment: left;
-                        vertical-alignment: top;
-                        wrap: word-wrap;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        horizontal-stretch: 1;
                         vertical-stretch: 1;
+
+                        VerticalBox {
+                            horizontal-stretch: 1;
+                            padding: 0px;
+                            spacing: 0px;
+
+                            Text {
+                                text: "Playback";
+                                height: 18px;
+                                color: Tokens.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "Space"; }
+                                Text {
+                                    text: "Play or pause";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "←"; }
+                                KeyCap { label: "→"; }
+                                Text {
+                                    text: "Back or forward 15 s";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "N"; }
+                                Text {
+                                    text: "Next track";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "P"; }
+                                Text {
+                                    text: "Previous, or restart after 5 s";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Text {
+                                text: "Speed";
+                                height: 18px;
+                                color: Tokens.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "["; }
+                                KeyCap { label: "]"; }
+                                Text {
+                                    text: "Slower or faster";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        VerticalBox {
+                            horizontal-stretch: 1;
+                            padding: 0px;
+                            spacing: 0px;
+
+                            Text {
+                                text: "Files";
+                                height: 18px;
+                                color: Tokens.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "Ctrl"; }
+                                KeyCap { label: "O"; }
+                                Text {
+                                    text: "Open file";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "Ctrl"; }
+                                KeyCap { label: "Shift"; }
+                                KeyCap { label: "O"; }
+                                Text {
+                                    text: "Open folder";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "Drop"; }
+                                Text {
+                                    text: "File or folder";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Rectangle { height: 12px; }
+                            Text {
+                                text: "View";
+                                height: 18px;
+                                color: Tokens.text-muted;
+                                font-size: 11px;
+                                font-weight: 600;
+                                vertical-alignment: center;
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "V"; }
+                                Text {
+                                    text: "Visualizer";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "?"; }
+                                KeyCap { label: "F1"; }
+                                Text {
+                                    text: "Help";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            HorizontalLayout {
+                                height: 22px;
+                                spacing: 4px;
+                                alignment: start;
+                                KeyCap { label: "Esc"; }
+                                Text {
+                                    text: "Close";
+                                    color: Tokens.text-primary;
+                                    font-size: 12px;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
                     }
 
-                    Text {
-                        text: "Q-pid";
-                        color: Tokens.text-muted;
-                        font-size: 10px;
-                        horizontal-alignment: center;
+                    HorizontalBox {
+                        padding: 0px;
+                        height: 16px;
+                        Text {
+                            text: root.help-version + " PULSAR";
+                            color: Tokens.text-muted;
+                            font-size: 11px;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.help-media-note;
+                            color: Tokens.text-muted;
+                            font-size: 11px;
+                            horizontal-alignment: right;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
                     }
                 }
             }

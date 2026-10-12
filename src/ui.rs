@@ -167,6 +167,16 @@ impl TimerControl {
 }
 
 pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event>, shared: Arc<Shared>) {
+    // Design §7 footer strings, set once at startup. Manual sync point:
+    // the Cargo.toml version feeds the label via env!("CARGO_PKG_VERSION").
+    window.set_help_version(concat!("Q-pid ", env!("CARGO_PKG_VERSION")).into());
+    window.set_help_media_note(if cfg!(windows) {
+        "Media keys: play, next, previous"
+    } else {
+        ""
+    }
+    .into());
+
     // Open file / open folder: the two entry points required by Phase 0/1.
     {
         let cmd_tx = cmd_tx.clone();
