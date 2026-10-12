@@ -13,6 +13,10 @@ const MAX_FOLDERS: usize = 100;       // section 9 rule 3
 pub struct Store {
     pub version: u32,
     pub speed: f64,
+    /// Visualizer mode: 0 off, 1 Line, 2 Pulsar (design §8.5; missing
+    /// field loads as 0, so files written by older builds open as Off).
+    #[serde(default)]
+    pub viz: u8,
     pub last_folder: String,
     pub folders: HashMap<String, Folder>,
 }
@@ -33,7 +37,7 @@ pub struct FileEntry {
 
 impl Default for Store {
     fn default() -> Self {
-        Store { version: SCHEMA_VERSION, speed: 1.0, last_folder: String::new(), folders: HashMap::new() }
+        Store { version: SCHEMA_VERSION, speed: 1.0, viz: 0, last_folder: String::new(), folders: HashMap::new() }
     }
 }
 
@@ -200,6 +204,25 @@ mod tests {
     fn key_unix_paths_are_only_lowercased() {
         assert_eq!(key("/home/User/Books/Ch1.mp3"), "/home/user/books/ch1.mp3");
         assert_eq!(key(r"\\?\C:\A"), key("c:\\a")); // strip still works
+    }
+
+    #[test]
+    fn viz_roundtrip() {
+        let p = tmp_path("viz_rt");
+        let mut s = Store::default();
+        s.viz = 2;
+        s.save_to(&p);
+        assert_eq!(load_from(&p).viz, 2);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn viz_missing_field_defaults_to_zero() {
+        // old file without the field loads as 0
+        let p = tmp_path("viz_missing");
+        std::fs::write(&p, r#"{"version":1,"speed":1.0,"last_folder":"","folders":{}}"#).unwrap();
+        assert_eq!(load_from(&p).viz, 0);
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

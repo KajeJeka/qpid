@@ -78,6 +78,17 @@ impl Speed {
             _ => Speed::X1,
         }
     }
+
+    /// Index into the five-cell speed row (0..=4), matching `from_index`.
+    pub fn index(self) -> u32 {
+        match self {
+            Speed::X0_5 => 0,
+            Speed::X1 => 1,
+            Speed::X1_25 => 2,
+            Speed::X1_5 => 3,
+            Speed::X2 => 4,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +103,7 @@ pub enum Command {
     Prev,
     RestoreSession,
     SetSpeed(Speed),
+    SetViz(u8), // 0 off, 1 line, 2 pulsar; saved like a speed change
     Shutdown,
 }
 
@@ -115,6 +127,9 @@ pub enum Event {
     },
     StateChanged(PlayState),
     Message(String),
+    /// Sent once after the store loads: restores the speed row and the
+    /// viz mode (also fixes the stale speed-row quirk). Engine -> UI only.
+    Settings { speed_index: u32, viz: u8 },
 }
 
 /// All fields are atomics so the UI timer can read position without ever
@@ -213,6 +228,13 @@ pub fn run(rx: Receiver<Command>, tx_events: Sender<Event>, shared: Arc<Shared>)
     // through save_now (section 9 rule 5), which is the only place that
     // calls store.save().
     let mut store = store::load();
+
+    // Design §8.5: once after the store loads, hand the UI the persisted
+    // speed row and viz mode.
+    let _ = tx_events.send(Event::Settings {
+        speed_index: Speed::from_milli(store::speed_to_milli(store.speed)).index(),
+        viz: store.viz,
+    });
 
     let mut state = PlayState::Idle;
     let mut ctx: Option<PlaybackContext> = None;
@@ -600,6 +622,17 @@ fn handle_command(
             if matches!(*state, PlayState::Playing | PlayState::Paused) {
                 seek_to(cur, false, ctx, state, shared);
             }
+        }
+
+        Command::SetViz(v) => {
+            // Design §8.5: same write trigger as a speed change.
+            store.viz = v.min(2);
+            save_now(
+                store,
+                shared,
+                ctx.as_ref().map(|c| c.path.as_path()).or(released_path.as_deref()),
+                "visualizer change",
+            );
         }
     }
     true

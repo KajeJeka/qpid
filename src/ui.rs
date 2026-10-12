@@ -9,9 +9,7 @@
 //! window visible, stopped by pause/minimize), the seek slider drag guard,
 //! and the visibility sink from src/winit_hook.rs.
 
-use std::cell::Cell;
 use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -56,6 +54,12 @@ fn folder_display(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Design §8.1: cycle Off → Line → Pulsar → Off. Out-of-range input is
+/// clamped first, so 5 wraps to 0 like any other value above 2.
+fn next_viz_mode(mode: u32) -> u32 {
+    (mode.min(2) + 1) % 3
+}
+
 thread_local! {
     static TC: RefCell<Option<TimerControl>> = RefCell::new(None);
 }
@@ -78,6 +82,7 @@ struct TimerControl {
     last_elapsed: String,
     last_duration: String,
     last_frac: f32,
+    viz_mode: u32, // 0 off, 1 line, 2 pulsar (design §8.4: drives the interval)
 }
 
 impl TimerControl {
@@ -95,6 +100,7 @@ impl TimerControl {
             // dur==0 refresh sees a change and blanks it (section 7 rule 7).
             last_duration: "0:00".into(),
             last_frac: 0.0,
+            viz_mode: 0,
         }
     }
 
@@ -108,13 +114,33 @@ impl TimerControl {
         self.recompute();
     }
 
+    /// Design §8.4.1: the one sanctioned timer is restarted at the new
+    /// mode-dependent interval when the mode changes while running.
+    fn set_viz_mode(&mut self, mode: u32) {
+        if self.viz_mode == mode {
+            return;
+        }
+        self.viz_mode = mode;
+        if self.running {
+            self.running = false;
+            self.timer.stop();
+        }
+        self.recompute();
+    }
+
     /// Spec 4.3: start iff playing && visible; stop otherwise. Starting a
     /// running timer (or stopping a stopped one) is a no-op via `running`.
     fn recompute(&mut self) {
         if self.playing && self.visible {
             if !self.running {
                 self.running = true;
-                self.timer.start(slint::TimerMode::Repeated, Duration::from_millis(500), || {
+                // Design §3 / §8.4: 500 ms off, 66 ms line, 100 ms pulsar.
+                let interval = match self.viz_mode {
+                    1 => 66,
+                    2 => 100,
+                    _ => 500,
+                };
+                self.timer.start(slint::TimerMode::Repeated, Duration::from_millis(interval), || {
                     with_tc(|tc| {
                         if let Some(t) = tc {
                             t.tick();
@@ -293,44 +319,70 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
             });
         });
     }
-    // Spec 4.4: one source of truth for the segment index; both the
-    // segment buttons and the [ ] step binding go through it.
-    let speed_index = Rc::new(Cell::new(1i32)); // window default is 1 (1x)
-    // Shared sync sequence (send -> step source -> UI property). Clamping
-    // stays at each call site: set clamps, step uses clamp_step.
-    fn apply_speed(
-        cmd_tx: &Sender<Command>,
-        weak: &slint::Weak<MainWindow>,
-        speed_index: &Cell<i32>,
-        index: i32,
-    ) {
+    // Spec 4.4: the `speed-index` window property is the one source of
+    // truth for the segment index; both the segment buttons and the [ ]
+    // step binding go through it. (The former Rc<Cell<i32>> duplicate
+    // could not be updated from the event-drain thread — Rc is !Send —
+    // and Event::Settings needs the same sync; the property covers both.)
+    fn apply_speed(cmd_tx: &Sender<Command>, weak: &slint::Weak<MainWindow>, index: i32) {
         let _ = cmd_tx.send(Command::SetSpeed(crate::engine::Speed::from_index(
             index as u32,
         )));
-        speed_index.set(index);
         if let Some(window) = weak.upgrade() {
             window.set_speed_index(index);
         }
     }
+    // Shared sync sequence (send -> UI property). Clamping stays at each
+    // call site: set clamps, step uses clamp_step.
     {
         let cmd_tx = cmd_tx.clone();
         let weak = window.as_weak();
-        let speed_index = Rc::clone(&speed_index);
         window.on_set_speed(move |index| {
-            apply_speed(&cmd_tx, &weak, &speed_index, index.clamp(0, 4));
+            apply_speed(&cmd_tx, &weak, index.clamp(0, 4));
         });
     }
     {
         let cmd_tx = cmd_tx.clone();
         let weak = window.as_weak();
-        let speed_index = Rc::clone(&speed_index);
         window.on_step_speed(move |delta| {
-            apply_speed(
-                &cmd_tx,
-                &weak,
-                &speed_index,
-                clamp_step(speed_index.get(), delta),
-            );
+            let Some(w) = weak.upgrade() else { return };
+            let next = clamp_step(w.get_speed_index(), delta);
+            apply_speed(&cmd_tx, &weak, next);
+        });
+    }
+
+    // Design §8.1: V key, top-row wave button and mode-label click all
+    // land here. Off <-> mode crossings resize the window by 80 logical px
+    // (72 strip + 8 gap); Line <-> Pulsar does not resize. The size is
+    // captured before the mode change so the min-height enforcement that
+    // follows cannot double-count the strip. A refused resize (maximized,
+    // tiled) is not retried: the `viz-mode != 0` strip binding hides it
+    // until there is room.
+    {
+        let cmd_tx = cmd_tx.clone();
+        let weak = window.as_weak();
+        window.on_cycle_viz(move || {
+            let Some(window) = weak.upgrade() else { return };
+            let old = window.get_viz_mode();
+            let next = next_viz_mode(old.max(0) as u32);
+            let captured = if (old == 0) != (next == 0) {
+                let w = window.window();
+                Some(w.size().to_logical(w.scale_factor()))
+            } else {
+                None
+            };
+            window.set_viz_mode(next as i32);
+            with_tc(|tc| {
+                if let Some(t) = tc {
+                    t.set_viz_mode(next);
+                }
+            });
+            if let Some(logical) = captured {
+                let h = (logical.height + if next == 0 { -80.0 } else { 80.0 })
+                    .max(if next == 0 { 320.0 } else { 400.0 });
+                window.window().set_size(slint::LogicalSize::new(logical.width, h));
+            }
+            let _ = cmd_tx.send(Command::SetViz(next as u8));
         });
     }
 
@@ -412,6 +464,17 @@ pub fn wire(window: &MainWindow, cmd_tx: Sender<Command>, evt_rx: Receiver<Event
                     Event::Message(msg) => {
                         window.set_status_text(msg.into());
                     }
+                    Event::Settings { speed_index, viz } => {
+                        // Design §8.5: engine -> UI only; never echo SetViz
+                        // back (the store is already the source of truth).
+                        window.set_speed_index(speed_index as i32);
+                        window.set_viz_mode(viz as i32);
+                        with_tc(|tc| {
+                            if let Some(t) = tc {
+                                t.set_viz_mode(viz as u32);
+                            }
+                        });
+                    }
                 }
                 // Any event can change the displayed position/duration
                 // (open, restore, seek, advance): refresh once even while
@@ -433,6 +496,7 @@ mod tests {
     use super::fraction_to_ms;
     use super::clamp_step;
     use super::folder_display;
+    use super::next_viz_mode;
 
     #[test]
     fn clamp_step_steps_within_range() {
@@ -527,5 +591,17 @@ mod tests {
     fn folder_display_root_falls_back_to_full() {
         assert_eq!(folder_display(r"C:\"), r"C:\");
         assert_eq!(folder_display("/"), "/");
+    }
+
+    #[test]
+    fn next_viz_mode_cycles_three_states() {
+        assert_eq!(next_viz_mode(0), 1);
+        assert_eq!(next_viz_mode(1), 2);
+        assert_eq!(next_viz_mode(2), 0);
+    }
+
+    #[test]
+    fn next_viz_mode_clamps_out_of_range() {
+        assert_eq!(next_viz_mode(5), 0); // (5 + 1) % 3 == 0 — locked wrap
     }
 }

@@ -350,9 +350,9 @@ export component MainWindow inherits Window {
     default-font-family: "Segoe UI Variable";
 
     preferred-width: 480px;
-    preferred-height: 320px;
+    preferred-height: root.viz-mode == 0 ? 320px : 400px;
     min-width: 400px;
-    min-height: 320px;
+    min-height: root.viz-mode == 0 ? 320px : 400px;
 
     forward-focus: keys;
 
@@ -369,6 +369,10 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     in property <int> speed-index: 1; // 0=0.5x 1=1x 2=1.25x 3=1.5x 4=2x
     in property <bool> seek-enabled: false;
+    // Visualizer mode (design §8.1): 0=off 1=line 2=pulsar. ui.rs writes
+    // it from cycle-viz and Event::Settings; the strip slot and the
+    // window min-height bind to it.
+    in property <int> viz-mode: 0;
     // Restore-from-minimize repaint trigger (ui.rs visibility sink): the
     // full-size overlay below reads it, so a bump marks the whole window
     // dirty and forces a complete redraw.
@@ -392,6 +396,9 @@ export component MainWindow inherits Window {
     callback seek-to(float);
     callback seek-dragging(value-changed: bool);
     callback step-speed(int);
+    // Design §8.1: V key, top-row wave button and mode-label click all
+    // cycle Off -> Line -> Pulsar -> Off (wired in ui.rs).
+    callback cycle-viz();
 
     keys := FocusScope {
         x: 0;
@@ -430,6 +437,7 @@ export component MainWindow inherits Window {
             if (event.text == Key.RightArrow) { root.seek-forward(); return accept; }
             if (event.text == "n" || event.text == "N") { root.next-track(); return accept; }
             if (event.text == "p" || event.text == "P") { root.prev-track(); return accept; }
+            if (event.text == "v" || event.text == "V") { root.cycle-viz(); return accept; }
             if (event.text == "[") { root.step-speed(-1); return accept; }
             if (event.text == "]") { root.step-speed(1); return accept; }
             return reject;
@@ -458,6 +466,10 @@ export component MainWindow inherits Window {
                     clicked => { root.open-folder(); }
                 }
                 Rectangle { horizontal-stretch: 1; }
+                IconButton {
+                    icon: 0;
+                    clicked => { root.cycle-viz(); }
+                }
                 IconButton {
                     icon: 1;
                     clicked => { root.show-help = !root.show-help; }
@@ -541,6 +553,33 @@ export component MainWindow inherits Window {
                         text: "Drop a folder or file here, or press Open";
                         color: Tokens.text-muted;
                         font-size: 13px;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Visualizer strip (design §5 row 3b, §8.1): 72 px, 8 px gap
+            // above via the VerticalBox spacing (80 px total, matching the
+            // window resize delta). T5 draws into it; the small mode label
+            // at the bottom-left cycles the mode.
+            if root.viz-mode != 0: Rectangle {
+                height: 72px;
+                background: Tokens.bg;
+
+                TouchArea {
+                    x: 6px;
+                    y: parent.height - 22px;
+                    width: 60px;
+                    height: 18px;
+
+                    Text {
+                        x: 0;
+                        y: 0;
+                        width: 100%;
+                        height: 100%;
+                        text: root.viz-mode == 1 ? "Line" : "Pulsar";
+                        color: parent.has-hover ? Tokens.text-primary : Tokens.text-muted;
+                        font-size: 10px;
                         vertical-alignment: center;
                     }
                 }
