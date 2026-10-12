@@ -50,6 +50,8 @@ component IconButton inherits Rectangle {
         y: 6px;
         width: 24px;
         height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
         stroke: area.has-hover ? Tokens.text-primary : Tokens.text-muted;
         stroke-width: 1.8px;
         commands: "M 3 12 L 6 12 L 8 6 L 11 18 L 14 9 L 16 14 L 18 12 L 21 12";
@@ -78,7 +80,8 @@ component GlyphButton inherits Rectangle {
 
     property <length> d: root.primary ? 64px : 44px;
     property <length> g: root.primary ? 26px : 20px;
-    property <brush> glyph: root.primary ? Tokens.accent-text
+    property <brush> glyph: root.primary && root.enabled ? Tokens.accent-text
+        : root.primary ? Tokens.text-dim
         : root.enabled ? Tokens.text-primary : Tokens.text-dim;
 
     width: d;
@@ -98,6 +101,8 @@ component GlyphButton inherits Rectangle {
         y: (root.height - self.height) / 2;
         width: g;
         height: g;
+        viewbox-width: 24;
+        viewbox-height: 24;
         fill: root.glyph;
         commands: "M 5 5 L 7.6 5 L 7.6 19 L 5 19 Z M 19 6 L 19 18 L 9.5 12 Z";
     }
@@ -106,6 +111,8 @@ component GlyphButton inherits Rectangle {
         y: (root.height - self.height) / 2;
         width: g;
         height: g;
+        viewbox-width: 24;
+        viewbox-height: 24;
         fill: root.glyph;
         commands: "M 16.4 5 L 19 5 L 19 19 L 16.4 19 Z M 5 6 L 5 18 L 14.5 12 Z";
     }
@@ -114,6 +121,8 @@ component GlyphButton inherits Rectangle {
         y: (root.height - self.height) / 2;
         width: g;
         height: g;
+        viewbox-width: 24;
+        viewbox-height: 24;
         fill: root.glyph;
         commands: "M 8 5.5 L 8 18.5 L 19 12 Z";
     }
@@ -122,6 +131,8 @@ component GlyphButton inherits Rectangle {
         y: (root.height - self.height) / 2;
         width: g;
         height: g;
+        viewbox-width: 24;
+        viewbox-height: 24;
         fill: root.glyph;
         commands: "M 6.5 5 L 10.3 5 L 10.3 19 L 6.5 19 Z M 13.7 5 L 17.5 5 L 17.5 19 L 13.7 19 Z";
     }
