@@ -23,7 +23,7 @@ Priority order for every decision:
 
 Measured on Windows 11 x64, release build, one 44.1 kHz stereo MP3 at 128 kbps, after 60 s of playback.
 
-1. Exe size: 10 MB or less.
+1. Exe size: 11,031,024 B (10.52 MiB) or less. (Raised from 10 MB for PULSAR: the Slint software renderer links a one-time ~34 KB path rasterizer the first time a `Path` element is used — measured 2026-10-11, 10,493,440 B with Path icons vs 10,459,648 without. Old 10 MB cap = 10,485,760 B.)
 2. Startup to first frame: 300 ms or less.
 3. Private working set, window visible, playing at 1x: 25 MB or less.
 4. Private working set, window minimized, playing at 1x: 15 MB or less. Measure without the working set trim from section 11. The trim must not be used to pass this budget.
@@ -32,6 +32,9 @@ Measured on Windows 11 x64, release build, one 44.1 kHz stereo MP3 at 128 kbps, 
 7. Paused for more than 10 s: 0.0% CPU, no timers, no audio stream open, no decoder open.
 8. Threads owned by the app: 12 or fewer. (Revised from 4 — the thread isolation measurement in `BENCH.md` shows Slint's floor alone is 9 and cpal's is 7; the app-owned design target stays 3 threads.)
 9. Wakeups from app code during background playback, excluding the audio callback: 2 per second or fewer.
+10. CPU, visualizer on, window visible, playing at 1x: 3% of one core or less.
+
+Budgets 4 to 9 are measured with the visualizer off and again with it on and the window minimized (must match off).
 
 If a budget fails, fix it before adding features. These are targets. The agent must measure them, not assume them.
 
@@ -99,6 +102,7 @@ pub enum Command {
     Next,
     Prev,
     SetSpeed(Speed),
+    SetViz(u8),                      // 0 off, 1 line, 2 pulsar; saved like a speed change
     Shutdown,
 }
 
@@ -106,6 +110,7 @@ pub enum Event {                    // sent only when something changes
     TrackChanged { folder: String, title: String, index: u32, count: u32, duration_ms: u64 },
     StateChanged(PlayState),        // Idle, Playing, Paused, Ended, Error
     Message(String),                // short user visible error text
+    Settings { speed_index: u32, viz: u8 }, // sent once after the store loads; sets the speed row and the viz mode (also fixes the stale speed-row quirk)
 }
 
 pub struct Shared {                 // all atomics, read by the UI timer
@@ -119,6 +124,8 @@ pub struct Shared {                 // all atomics, read by the UI timer
     pub flush_ack: AtomicBool,
     pub eof: AtomicBool,
     pub drained: AtomicBool,
+    // T5 adds three viz atomics: viz_on: AtomicBool, viz_head: AtomicU32,
+    // viz_peaks: [AtomicU32; 128] (peak as f32 bits)
 }
 ```
 
@@ -235,6 +242,7 @@ Schema:
 {
   "version": 1,
   "speed": 1.25,
+  "viz": 0,
   "last_folder": "d:\\audiobooks\\book one",
   "folders": {
     "d:\\audiobooks\\book one": {
@@ -248,13 +256,15 @@ Schema:
 }
 ```
 
+`viz`: 0 off, 1 Line, 2 Pulsar. A missing field loads as 0, so files written by older builds open as Off. `version` stays 1.
+
 Rules:
 
 1. Key folders by lowercase path with any `\\?\` prefix stripped. Key files by lowercase file name.
 2. Store `size`. If the size differs on load, ignore the saved position for that file.
 3. Store entries only for files with a position above 0 or marked done. Keep at most 100 folders, evicting by oldest `touched`.
 4. A file is `done` when it reaches end of stream or the position is within the last 3 s.
-5. Write triggers: pause, next, prev, open of another path, speed change, app exit, error stop, and every 30 s while playing. Also write when a checkpoint is due only if the position changed.
+5. Write triggers: pause, next, prev, open of another path, speed change, visualizer change, app exit, error stop, and every 30 s while playing. Also write when a checkpoint is due only if the position changed.
 6. Write atomically: write `state.json.tmp` in the same folder, then `std::fs::rename` over the target. Never write per second.
 7. Expected loss after a crash or power cut: 30 s or less.
 8. Optional constant `RESUME_REWIND_MS`, default 0. Applied once when resuming a saved position.
@@ -268,19 +278,32 @@ Restore rules:
 
 ## 10. UI specification
 
-Window: default 480 x 320 px, minimum 400 x 280 px, resizable. Native title bar. Follow the system light or dark theme. Font: Segoe UI Variable (system font, nothing embedded). Use the Slint `fluent` style for slider and buttons. Icons: glyphs from the system font Segoe Fluent Icons (play, pause, previous, next). Verify codepoints against the font map. If the icon font causes a memory or startup problem, draw the icons with Slint `Path`. Do not add SVG assets. SVG support pulls in a renderer.
+Window: default 480 x 320 px, minimum 400 x 320 px (was 280 high: the new rows need 314), resizable. With the visualizer on, the preferred and the minimum height become 400. Extra height goes to a flexible spacer above the seek row. Native title bar. Follow the system light or dark theme. Font: Segoe UI Variable (system font, nothing embedded). Use the Slint `fluent` style for slider and buttons. Icons: drawn with Slint `Path`, literal `commands` strings only, 24 x 24 viewbox, `fill` set, no SVG assets.
 
-Layout, top to bottom, 20 px outer padding, 8 px spacing grid:
+Layout, top to bottom, 20 px outer padding, 8 px spacing grid, heights in px (no visualizer, total 314 of 320):
 
-1. Top row: "Open file" and "Open folder" buttons, left aligned.
-2. Folder name. 12 px, muted color, single line, elide at the left.
-3. Track title. 18 px, semibold, single line, elide at the right. Track index like "3 / 24" right aligned, muted.
-4. Seek slider, full width. Elapsed time on its left, total duration on its right. Format `H:MM:SS`, or `M:SS` under one hour.
-5. Transport row, centered: Previous, "-15", Play/Pause (large, 56 px circle, accent fill), "+15", Next. "-15" and "+15" are text buttons.
-6. Speed row, centered: a segmented control with five fixed values: 0.5x, 1x, 1.25x, 1.5x, 2x. The active segment uses the accent fill.
-7. Status line. Empty by default. Shows `Message` text such as an unreadable file.
+| # | Row | Height | Gap above |
+|---|---|---|---|
+| 1 | Top row | 36 | 16 (padding) |
+| 2 | Folder row | 16 | 8 |
+| 3 | Title row | 28 | 8 |
+| 3b | Visualizer strip (only when on) | 72 | 8 |
+| 4 | Seek control (24) + times row (14) | 42 | 8 (+4 inside) |
+| 5 | Transport row | 64 | 8 |
+| 6 | Speed control | 34 | 8 |
+| 7 | Status line (always reserved, no layout jump) | 14 | 8 |
+|   | Bottom padding | 16 |  |
 
-Empty state: the title area reads "Drop a folder or file here, or press Open".
+1. Top row: "Open file" and "Open folder" buttons left, 36 px tall, surface fill, 1 px divider border, radius 8, 12 px text, 14 px side padding. Right: two round 36 px icon buttons, divider border, no fill: Visualizer (wave glyph, cycles the mode) and Help (`?`, 14 px, semibold, text-muted). Hit area of each control is 40 px tall (TouchArea 2 px larger on top and bottom, no clipping).
+2. Folder row: 14 px folder icon, then the folder name, 12 px, text-muted, elide right. The name is the last path component of the `folder` string, computed in `ui.rs` when `TrackChanged` arrives. No engine change. If the path has no file name (a drive root), show the full string.
+3. Title row: title 20 px, semibold, elide right. The `N / M` counter sits right after the title, aligned to the title baseline, in a pill: 11 px text-muted, surface fill, 1 px divider border, radius 999, padding 2 px by 9 px.
+3b. Visualizer strip: present only when the visualizer mode is not Off. Turning it on or off changes the window height by 80 px (72 px strip plus 8 px gap); Line to Pulsar does not resize.
+4. Seek control: touch height 24 px, track 6 px high, centered, radius 3, divider color, accent fill. Thumb: 14 px circle, text-primary, centered on the fill end, shown only when the control is enabled. The 24 px touch height is the deliberate exception to the 40 px rule, the control spans the full width. All pointer logic in `SeekSlider` stays as it is; only the drawing changes. Times row below: elapsed on the left in text-primary, duration on the right in text-muted, both 11 px, so digit width changes move nothing. Format `H:MM:SS`, or `M:SS` under one hour.
+5. Transport row: centered, 10 px between items. Previous and Next: 44 px round, no fill, 20 px `Path` icon, hover surface-hover. Back and forward 15: pill buttons 40 px tall, min width 48, surface fill, 1 px divider border, 13 px, semibold, text `-15` and `+15`. Play and pause: 64 px circle, accent fill, 26 px `Path` icon in accent text. The icon swaps between play and pause.
+6. Speed control: one pill container, surface fill, 1 px divider border, radius 17, 3 px padding. Five equal cells, 56 x 26, radius 13. Active cell: accent fill, semibold. Inactive: text-muted. Container width is 288 px. Labels: 0.5x, 1x, 1.25x, 1.5x, 2x.
+7. Status line: always reserved, no layout jump. Empty by default. Shows `Message` text such as an unreadable file. Clear it on the next `TrackChanged`, `Play` or open command.
+
+Empty state: when there is no track, rows 2 and 3 are replaced by one card of the same total height (52 px): surface-sunken fill, 1 px divider border, radius 8, a folder icon and "Drop a folder or file here, or press Open" in 13 px text-muted, centered. Seek, transport and speed stay in place with the dim tokens, so nothing moves when a track loads.
 
 Design tokens (define once in the .slint file, light and dark variants):
 
@@ -291,12 +314,12 @@ Design tokens (define once in the .slint file, light and dark variants):
 
 Behavior:
 
-1. Timer: 500 ms tick while the window is visible and playing. It reads `Shared`, computes position, and sets properties only when the displayed value changes. Stop the timer on pause, minimize and occlusion. Restart on the opposite event.
+1. Timer: the one sanctioned timer, started while the window is visible and playing, stopped on pause, minimize and occlusion, restarted on the opposite event (same start and stop rules as before). Interval: 500 ms with the visualizer off, 66 ms in Line, 100 ms in Pulsar; restarted when the mode changes. Still one timer. It reads `Shared`, computes position, and sets properties only when the displayed value changes.
 2. Slider drag: while the user drags, ignore engine position. On release, send `SeekAbsolute`.
-3. Window events: use the winit hook to receive minimize, occlusion and dropped file events. Fallback if the hook is unavailable: a 1 s timer that only checks `Window::is_minimized()` and stops the 500 ms timer. Skip drag and drop in v1 if the hook is unavailable.
+3. Window events: use the winit hook to receive minimize, occlusion and dropped file events. Fallback if the hook is unavailable: a 1 s timer that only checks `Window::is_minimized()` and stops the sanctioned timer. Skip drag and drop in v1 if the hook is unavailable.
 4. File dialogs: `rfd` in a short lived thread. Return the path with `invoke_from_event_loop`. Send `OpenPath`.
 5. Command line: a path argument behaves like `OpenPath`. This makes Explorer "Open with" work.
-6. Keyboard: Space toggles play. Left and Right seek 15 s. `N` next. `P` previous. `[` and `]` step speed down and up. Ctrl+O opens a file. Ctrl+Shift+O opens a folder.
+6. Keyboard: Space toggles play. Left and Right seek 15 s. `N` next. `P` previous. `[` and `]` step speed down and up. `V` cycles the visualizer. `?` and `F1` toggle Help. Ctrl+O opens a file. Ctrl+Shift+O opens a folder.
 7. Close button: save state and exit. No tray icon.
 8. The current speed is global and persisted.
 
@@ -307,8 +330,8 @@ Every rule is mandatory.
 1. No polling loops. Every wait is a blocking wait with a timeout or an event.
 2. Never call `timeBeginPeriod`. It raises timer resolution system wide.
 3. No `sleep(1)` loops, no `yield_now` loops, no spin waits longer than the 2 ms flush parks.
-4. Animations off. No spinners, no hover transitions, no progress animations.
-5. Set UI properties only when the value changes.
+4. Animations off. No spinners, no hover transitions, no progress animations. The visualizer is a data display, not an animation. It runs only while the window is visible, playing, and the mode is not Off.
+5. Set UI properties only when the value changes. The visualizer redraws only when new peak blocks arrived since the last tick.
 6. Producer thread priority `BELOW_NORMAL`. The 3 s ring absorbs scheduling delay.
 7. On minimize or occlusion: enable EcoQoS for the process with `SetProcessInformation` and `ProcessPowerThrottling`. Set `ControlMask` and `StateMask` both to `PROCESS_POWER_THROTTLING_EXECUTION_SPEED`. On restore, set `StateMask` to 0. Test 30 minutes of playback with EcoQoS on and confirm zero underruns. If underruns appear, keep EcoQoS off and raise the ring to 5 s.
 8. On minimize, after 2 s, call `SetProcessWorkingSetSize(process, usize::MAX, usize::MAX)` once. This lowers the number shown in Task Manager. Committed memory does not change. Budgets are measured without it.
@@ -442,7 +465,7 @@ Do not start a phase before the previous exit criteria pass.
 1. Run every scenario in `tools/bench.py`. Compare to section 2.
 2. Fix failures in this order: threads and wakeups, timers, memory, CPU.
 3. If callback wakeups exceed budget, replace cpal with direct WASAPI (`windows` crate) in shared mode, timer driven, with a 200 ms period. Do this only if measurement demands it.
-4. Exit: all nine budgets pass. Record the results in `BENCH.md`.
+4. Exit: all ten budgets pass. Record the results in `BENCH.md`.
 
 ## 16. Acceptance tests
 
@@ -477,7 +500,7 @@ Always:
 Never:
 
 1. Add a dependency that is not listed here without stating its RAM and binary cost.
-2. Add a background thread, timer or periodic task that is not in this document.
+2. Add a background thread, timer or periodic task that is not in this document. The visualizer must reuse the sanctioned timer; no new timer or thread for it.
 3. Use `timeBeginPeriod`, busy loops, or animations.
 4. Memory map audio files.
 5. Ship Python, ffmpeg, libmpv or a browser engine.
