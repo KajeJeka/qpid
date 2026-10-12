@@ -34,6 +34,8 @@ Release settings favor size over speed (`opt-level = "s"`, fat LTO, LTO'd depend
 
 Supported formats: mp3, m4a, m4b, aac, flac, ogg, wav (via symphonia).
 
+Keyboard: `Space` play/pause, `←`/`→` skip 15 s, `N`/`P` next/previous, `[`/`]` speed, `V` cycle the visualizer (Off → Line → Pulsar), `?`/`F1` help. The full list — chords, help overlay, media keys — is in [docs/USER_GUIDE.md](docs/USER_GUIDE.md) §3.
+
 ## How the code works, start to finish
 
 ### 1. Process startup (`src/main.rs`)
@@ -148,7 +150,7 @@ The visibility sink from the winit hook does two jobs on minimize: it switches t
 
 ### 11. Where the numbers come from
 
-The ten resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate, visualizer CPU) are defined in docs/architecture.md §2 and measured in docs/BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap at that tag 10,485,760; the cap is now 11,031,024 B), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
+The ten resource budgets (executable size, launch time, RAM while playing and minimized, CPU in each state, thread count, wakeup rate, CPU with the visualizer on) are defined in docs/architecture.md §2 and measured in docs/BENCH.md. Current results at the v1.0.0 tag: 10,452,480 bytes in the shipped release exe (cap at that tag 10,485,760; the cap is now 11,031,024 B), 20.5 ms warm launch, 5.43 MB playing, 0.00% paused CPU, 12 threads (at cap), 0.55 wakes/s. Minimized CPU carries a permanent "unstable" ruling caused by Windows scheduling on hybrid CPUs, documented rather than hidden.
 
 ## Repository layout
 
