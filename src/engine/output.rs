@@ -228,6 +228,14 @@ fn audio_callback(
     let frames_needed = data.len() / device_channels.max(1);
     let mut frames_written = 0usize;
 
+    // PULSAR peak tap (design §8.2): one relaxed load per callback; when
+    // false the whole block below costs nothing. Tap sits after the gain
+    // step — it shows what you hear. No allocation, no lock, no channel.
+    let viz_on = shared.viz_on.load(Ordering::Relaxed);
+    let mut block_peak: f32 = 0.0;
+    let mut block_frames: u32 = 0;
+    let viz_period = (shared.out_rate.load(Ordering::Relaxed) / 500).max(1);
+
     for frame_idx in 0..frames_needed {
         let (l, r) = match (consumer.pop(), consumer.pop()) {
             (Ok(l), Ok(r)) => (l, r),
@@ -254,6 +262,21 @@ fn audio_callback(
 
         let out_l = l * *current_gain;
         let out_r = r * *current_gain;
+
+        if viz_on {
+            let a = out_l.abs().max(out_r.abs());
+            if a > block_peak {
+                block_peak = a;
+            }
+            block_frames += 1;
+            if block_frames >= viz_period {
+                let head = shared.viz_head.load(Ordering::Relaxed);
+                shared.viz_peaks[(head % 128) as usize].store(block_peak.to_bits(), Ordering::Relaxed);
+                shared.viz_head.store(head.wrapping_add(1), Ordering::Release);
+                block_peak = 0.0;
+                block_frames = 0;
+            }
+        }
 
         write_frame(data, frame_idx, device_channels, out_l, out_r);
         frames_written += 1;

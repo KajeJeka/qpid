@@ -373,6 +373,9 @@ export component MainWindow inherits Window {
     // it from cycle-viz and Event::Settings; the strip slot and the
     // window min-height bind to it.
     in property <int> viz-mode: 0;
+    // Visualizer frame (design §8.3): ui.rs renders into a Rust pixel
+    // buffer each tick and sets it here; empty until the first draw.
+    in property <image> viz-image;
     // Restore-from-minimize repaint trigger (ui.rs visibility sink): the
     // full-size overlay below reads it, so a bump marks the whole window
     // dirty and forces a complete redraw.
@@ -565,6 +568,14 @@ export component MainWindow inherits Window {
             if root.viz-mode != 0: Rectangle {
                 height: 72px;
                 background: Tokens.bg;
+
+                Image {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: parent.height;
+                    source: root.viz-image;
+                }
 
                 TouchArea {
                     x: 6px;

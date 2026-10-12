@@ -156,6 +156,13 @@ pub struct Shared {
     // Section 12.3 rule 3: cpal error callback (device removed / sleep)
     // sets this; the engine swaps it false on its next wake.
     pub device_error: AtomicBool,
+    // PULSAR visualizer tap (design §8.2): written by the audio callback
+    // only, read by the UI timer. viz_on gates the tap (mode != Off &&
+    // window visible, set from TimerControl::recompute); viz_head is the
+    // ring write cursor; viz_peaks holds 128 block peaks as f32 bits.
+    pub viz_on: AtomicBool,
+    pub viz_head: AtomicU32,
+    pub viz_peaks: [AtomicU32; 128],
     pub started: std::time::Instant,
 }
 
@@ -175,6 +182,9 @@ impl Shared {
             wakes: AtomicU64::new(0),
             underruns: AtomicU64::new(0),
             device_error: AtomicBool::new(false),
+            viz_on: AtomicBool::new(false),
+            viz_head: AtomicU32::new(0),
+            viz_peaks: std::array::from_fn(|_| AtomicU32::new(0)),
             started: std::time::Instant::now(),
         })
     }

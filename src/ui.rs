@@ -10,7 +10,7 @@
 //! and the visibility sink from src/winit_hook.rs.
 
 use std::cell::RefCell;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,6 +60,216 @@ fn next_viz_mode(mode: u32) -> u32 {
     (mode.min(2) + 1) % 3
 }
 
+// -----------------------------------------------------------------------
+// PULSAR visualizer (design §8.2/§8.3). Pure helpers below; the draw path
+// and the peak-ring tap live with the timer (design §8.4).
+// -----------------------------------------------------------------------
+
+/// Bell window centered on a 48-column row: exp(-((x - w/2) / (w * 0.19))^2),
+/// peak 1.0 at the center, ~0 at the edges (design §8.3).
+fn bell_weight(x: f32, w: f32) -> f32 {
+    let c = (x - w / 2.0) / (w * 0.19);
+    (-c * c).exp()
+}
+
+/// Newest 48 blocks of the peak ring ending at `head`, each scaled by the
+/// row's bell window. Values come out in [0, ~1]; the draw path multiplies
+/// by 24 px (design §8.3 "scales to at most 24 px"). `row`/`rows` are kept
+/// for call-site symmetry; row-dependent work (color, baseline) is done at
+/// draw time from the history buffer.
+fn pulsar_row(peaks: &[AtomicU32; 128], head: u32, _row: usize, _rows: usize) -> [f32; 48] {
+    let w = 48.0f32;
+    let mut out = [0.0f32; 48];
+    for x in 0..48 {
+        let idx = (head.wrapping_sub(48) + x as u32) % 128;
+        let v = f32::from_bits(peaks[idx as usize].load(Ordering::Relaxed));
+        out[x] = v * bell_weight(x as f32, w);
+    }
+    out
+}
+
+/// Newest 128 blocks of the peak ring as a polyline: point `i` sits at
+/// `mid ± peak * half`, the sign alternating per point so the line reads as
+/// a waveform (design §8.3 Line mode).
+fn line_points(peaks: &[AtomicU32; 128], head: u32, mid: f32, half: f32) -> [(f32, f32); 128] {
+    let mut out = [(0.0f32, 0.0f32); 128];
+    for i in 0..128 {
+        let idx = (head.wrapping_sub(128) + i as u32) % 128;
+        let v = f32::from_bits(peaks[idx as usize].load(Ordering::Relaxed));
+        let sign = if i % 2 == 0 { 1.0 } else { -1.0 };
+        out[i] = (i as f32, mid + sign * v * half);
+    }
+    out
+}
+
+/// Pulsar history: the new front row enters at index 0, older rows move
+/// back one slot (design §8.3).
+fn push_history(history: &mut [[f32; 48]; 15], front: [f32; 48]) {
+    history.rotate_right(1);
+    history[0] = front;
+}
+
+// Design tokens used by the renderer (§4): bg, divider, accent, pulsar
+// back-row tint #1c5a10. RGBA8, opaque.
+const VIZ_BG: [u8; 4] = [0x0b, 0x0d, 0x0a, 0xff];
+const VIZ_DIVIDER: [u8; 4] = [0x23, 0x28, 0x1c, 0xff];
+const VIZ_ACCENT: [u8; 4] = [0x3a, 0xb8, 0x14, 0xff];
+const VIZ_PULSAR_BACK: [u8; 4] = [0x1c, 0x5a, 0x10, 0xff];
+
+/// Design §8.3.1: strip width × 72 logical, in physical pixels, capped
+/// 1280 × 240.
+fn viz_buffer_size(window: &slint::Window) -> (u32, u32) {
+    let scale = window.scale_factor();
+    let logical = window.size().to_logical(scale);
+    let w = (logical.width as f32 * scale).round() as u32;
+    let h = (72.0 * scale).round() as u32;
+    (w.clamp(2, 1280), h.clamp(2, 240))
+}
+
+#[inline]
+fn blend_px(dst: &mut [u8], src: [u8; 4], cov: f32) {
+    let a = cov * src[3] as f32 / 255.0;
+    let inv = 1.0 - a;
+    dst[0] = (src[0] as f32 * a + dst[0] as f32 * inv + 0.5) as u8;
+    dst[1] = (src[1] as f32 * a + dst[1] as f32 * inv + 0.5) as u8;
+    dst[2] = (src[2] as f32 * a + dst[2] as f32 * inv + 0.5) as u8;
+    // buffer is fully opaque (design §8.3.1: bg fill); alpha channel untouched
+}
+
+/// Hand-written AA segment (design §8.3.3): coverage = clamp(half + 0.5 −
+/// distance-to-segment, 0, 1), blended over the bg. Zero-length segments
+/// stamp a disc, which covers the polyline's round joins.
+fn draw_line_aa(
+    buf: &mut slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    half: f32,
+    color: [u8; 4],
+) {
+    let bw = buf.width() as i32;
+    let bh = buf.height() as i32;
+    let min_x = ((x0.min(x1) - half - 1.0).floor() as i32).max(0);
+    let max_x = ((x0.max(x1) + half + 1.0).ceil() as i32).min(bw - 1);
+    let min_y = ((y0.min(y1) - half - 1.0).floor() as i32).max(0);
+    let max_y = ((y0.max(y1) + half + 1.0).ceil() as i32).min(bh - 1);
+    if min_x > max_x || min_y > max_y {
+        return;
+    }
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len_sq = dx * dx + dy * dy;
+    let data = buf.make_mut_bytes();
+    let stride = bw as usize * 4;
+    for py in min_y..=max_y {
+        let row = py as usize * stride;
+        for px in min_x..=max_x {
+            let cx = px as f32 + 0.5;
+            let cy = py as f32 + 0.5;
+            let t = if len_sq > 0.0 {
+                (((cx - x0) * dx + (cy - y0) * dy) / len_sq).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let qx = x0 + t * dx;
+            let qy = y0 + t * dy;
+            let dist = ((cx - qx).powi(2) + (cy - qy).powi(2)).sqrt();
+            let cov = (half + 0.5 - dist).clamp(0.0, 1.0);
+            if cov > 0.0 {
+                blend_px(&mut data[row + px as usize * 4..row + px as usize * 4 + 4], color, cov);
+            }
+        }
+    }
+}
+
+fn lerp_color(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        (a[0] as f32 + (b[0] as f32 - a[0] as f32) * t + 0.5) as u8,
+        (a[1] as f32 + (b[1] as f32 - a[1] as f32) * t + 0.5) as u8,
+        (a[2] as f32 + (b[2] as f32 - a[2] as f32) * t + 0.5) as u8,
+        0xff,
+    ]
+}
+
+/// One full visualizer frame (design §8.3): clears to bg, then draws the
+/// mode's content. Called only from the timer tick with new peak blocks
+/// (design §8.4).
+fn draw_viz(
+    buf: &mut slint::SharedPixelBuffer<slint::Rgba8Pixel>,
+    mode: u32,
+    peaks: &[AtomicU32; 128],
+    head: u32,
+    history: &[[f32; 48]; 15],
+) {
+    {
+        let data = buf.make_mut_bytes();
+        for px in data.chunks_exact_mut(4) {
+            px.copy_from_slice(&VIZ_BG);
+        }
+    }
+    match mode {
+        1 => draw_line_mode(buf, peaks, head),
+        2 => draw_pulsar_mode(buf, history),
+        _ => {}
+    }
+}
+
+fn draw_line_mode(buf: &mut slint::SharedPixelBuffer<slint::Rgba8Pixel>, peaks: &[AtomicU32; 128], head: u32) {
+    let h = buf.height() as f32;
+    let w = buf.width() as f32;
+    let mid = h / 2.0;
+    let amp = h * (30.0 / 72.0); // 30 logical px scaled to the physical buffer
+    // center line (divider, 1 px)
+    draw_line_aa(buf, 0.0, mid, w - 1.0, mid, 0.5, VIZ_DIVIDER);
+    // polyline over the last 128 blocks; the AA caps at each segment end
+    // double as round joins
+    let pts = line_points(peaks, head, mid, amp);
+    let sx = (w - 1.0) / 127.0;
+    for i in 0..127 {
+        draw_line_aa(buf, pts[i].0 * sx, pts[i].1, pts[i + 1].0 * sx, pts[i + 1].1, 0.75, VIZ_ACCENT);
+    }
+}
+
+fn draw_pulsar_mode(buf: &mut slint::SharedPixelBuffer<slint::Rgba8Pixel>, history: &[[f32; 48]; 15]) {
+    let w = buf.width() as f32;
+    let h = buf.height() as f32;
+    let scale = h / 72.0;
+    let spacing = ((72.0 - 28.0) / 14.0) * scale; // baselines (design §8.3)
+    let amp = 24.0 * scale; // at most 24 logical px
+    let front_baseline = h - 1.0;
+    let sx = (w - 1.0) / 47.0;
+    // back to front: row 14 (oldest) first, row 0 (front/newest) last
+    for r in (0..15).rev() {
+        let baseline = front_baseline - r as f32 * spacing;
+        let color = lerp_color(VIZ_PULSAR_BACK, VIZ_ACCENT, (14 - r) as f32 / 14.0);
+        let row = &history[r];
+        // occlusion fill: from each column's curve down to the baseline plus
+        // one spacing, so the next (front) row hides this one behind it
+        {
+            let bh = buf.height() as usize;
+            let bw = buf.width() as usize;
+            let data = buf.make_mut_bytes();
+            for x in 0..48 {
+                let px = (x as f32 * sx) as usize;
+                let curve_y = (baseline - row[x] * amp).floor().max(0.0) as usize;
+                let fill_end = ((baseline + spacing).ceil() as usize).min(bh - 1);
+                for py in curve_y..=fill_end {
+                    let idx = py * bw * 4 + px * 4;
+                    data[idx..idx + 4].copy_from_slice(&VIZ_BG);
+                }
+            }
+        }
+        // stroke the row
+        for x in 0..47 {
+            let y0 = baseline - row[x] * amp;
+            let y1 = baseline - row[x + 1] * amp;
+            draw_line_aa(buf, x as f32 * sx, y0, (x + 1) as f32 * sx, y1, 0.65, color);
+        }
+    }
+}
+
 thread_local! {
     static TC: RefCell<Option<TimerControl>> = RefCell::new(None);
 }
@@ -83,6 +293,10 @@ struct TimerControl {
     last_duration: String,
     last_frac: f32,
     viz_mode: u32, // 0 off, 1 line, 2 pulsar (design §8.4: drives the interval)
+    // Design §8.4.2: redraw only when new peak blocks arrived; on mode
+    // change the history clears and the sentinel forces the next redraw.
+    last_viz_head: u32,
+    viz_history: [[f32; 48]; 15],
 }
 
 impl TimerControl {
@@ -101,6 +315,8 @@ impl TimerControl {
             last_duration: "0:00".into(),
             last_frac: 0.0,
             viz_mode: 0,
+            last_viz_head: u32::MAX,
+            viz_history: [[0.0; 48]; 15],
         }
     }
 
@@ -121,6 +337,10 @@ impl TimerControl {
             return;
         }
         self.viz_mode = mode;
+        // Design §8.4.2: on mode change the buffer clears — zero the
+        // history and arm the sentinel so the next tick redraws fresh.
+        self.viz_history = [[0.0; 48]; 15];
+        self.last_viz_head = u32::MAX;
         if self.running {
             self.running = false;
             self.timer.stop();
@@ -130,7 +350,13 @@ impl TimerControl {
 
     /// Spec 4.3: start iff playing && visible; stop otherwise. Starting a
     /// running timer (or stopping a stopped one) is a no-op via `running`.
+    /// Design §8.2.4: also gates the audio-side peak tap — true only when
+    /// the mode is not Off and the window is visible (a minimized window
+    /// means zero tap work; a paused stream means the callback never runs).
     fn recompute(&mut self) {
+        self.shared
+            .viz_on
+            .store(self.viz_mode != 0 && self.visible, Ordering::Relaxed);
         if self.playing && self.visible {
             if !self.running {
                 self.running = true;
@@ -156,6 +382,37 @@ impl TimerControl {
 
     fn tick(&mut self) {
         self.refresh();
+        self.draw_viz_if_needed();
+    }
+
+    /// Design §8.4.2: draw only when the mode is on, the window is visible
+    /// and we are playing (belt and braces — the timer already stops
+    /// otherwise), and new peak blocks arrived since the last redraw. On
+    /// pause the timer stops, so the strip freezes on the last frame with
+    /// zero CPU.
+    fn draw_viz_if_needed(&mut self) {
+        if self.viz_mode == 0 || !self.visible || !self.playing {
+            return;
+        }
+        let head = self.shared.viz_head.load(Ordering::Relaxed);
+        if head == self.last_viz_head {
+            return;
+        }
+        self.last_viz_head = head;
+        let Some(window) = self.weak.upgrade() else { return };
+        if self.viz_mode == 2 {
+            push_history(&mut self.viz_history, pulsar_row(&self.shared.viz_peaks, head, 0, 15));
+        }
+        let (w, h) = viz_buffer_size(&window.window());
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(w, h);
+        draw_viz(
+            &mut buf,
+            self.viz_mode,
+            &self.shared.viz_peaks,
+            head,
+            &self.viz_history,
+        );
+        window.set_viz_image(slint::Image::from_rgba8(buf));
     }
 
     /// One shared read, three display writes, each only when the displayed
@@ -497,6 +754,65 @@ mod tests {
     use super::clamp_step;
     use super::folder_display;
     use super::next_viz_mode;
+    use super::bell_weight;
+    use super::pulsar_row;
+    use super::line_points;
+    use super::push_history;
+    use super::draw_viz;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn bell_weight_peaks_at_center() {
+        assert!((bell_weight(24.0, 48.0) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bell_weight_symmetric_and_decays() {
+        assert!((bell_weight(12.0, 48.0) - bell_weight(36.0, 48.0)).abs() < 1e-6);
+        assert!(bell_weight(0.0, 48.0) < 0.01);
+    }
+
+    #[test]
+    fn pulsar_row_reads_newest_48() {
+        let peaks = std::array::from_fn(|_| AtomicU32::new(0));
+        // write distinct values into slots 0..128 with head=100
+        for i in 0..128u32 {
+            peaks[(i % 128) as usize].store((i as f32).to_bits(), Ordering::Relaxed);
+        }
+        let row = pulsar_row(&peaks, 100, 0, 15);
+        // newest value (index 99) sits at x=47 before bell scaling (bell(47) tiny) —
+        // assert row[24] corresponds to head-24 == 76 and equals 76 * bell_weight(24,48)
+        assert!((row[24] - 76.0 * bell_weight(24.0, 48.0)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn line_points_alternate_sign_and_excursion() {
+        let peaks = std::array::from_fn(|_| AtomicU32::new(1.0f32.to_bits()));
+        let pts = line_points(&peaks, 128, 36.0, 30.0);
+        // peak 1.0 everywhere: even i -> mid + half, odd i -> mid - half
+        assert!((pts[0].1 - 66.0).abs() < 1e-4);
+        assert!((pts[1].1 - 6.0).abs() < 1e-4);
+        assert!((pts[2].1 - 66.0).abs() < 1e-4);
+        let max_y = pts.iter().map(|p| p.1).fold(f32::MIN, f32::max);
+        assert!((max_y - 66.0).abs() < 1e-4);
+    }
+
+    // Design §10 / T5 step 8: synthetic sine feed — the render-cost spike's
+    // stand-in for live audio. Fills the ring, then drives the draw path
+    // 300x (30 s at 10 fps). Completes without panicking; wall-clock cost is
+    // measured outside the test.
+    #[test]
+    fn viz_synthetic_sine_feed_completes() {
+        let peaks: [AtomicU32; 128] =
+            std::array::from_fn(|i| AtomicU32::new((i as f32 * 0.2).sin().abs().to_bits()));
+        let mut history = [[0.0f32; 48]; 15];
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(220, 72);
+        for i in 0..300u32 {
+            push_history(&mut history, pulsar_row(&peaks, 128 + i, 0, 15));
+            draw_viz(&mut buf, 2, &peaks, 128 + i, &history);
+            draw_viz(&mut buf, 1, &peaks, 128 + i, &history);
+        }
+    }
 
     #[test]
     fn clamp_step_steps_within_range() {
