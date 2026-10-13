@@ -116,12 +116,14 @@ const VIZ_DIVIDER: [u8; 4] = [0x23, 0x28, 0x1c, 0xff];
 const VIZ_ACCENT: [u8; 4] = [0x3a, 0xb8, 0x14, 0xff];
 const VIZ_PULSAR_BACK: [u8; 4] = [0x1c, 0x5a, 0x10, 0xff];
 
-/// Design §8.3.1: strip height 72 logical, in physical pixels, width taken
-/// straight from the window's physical size, capped 1280 × 240.
+/// Design §8.3.1: strip height 72 logical, in physical pixels, width = the
+/// strip's own width (window minus the 20 px side padding of the column,
+/// main.slint), capped 1280 × 240.
 fn viz_buffer_size(window: &slint::Window) -> (u32, u32) {
     let physical = window.size(); // already physical px — no round trip
     let h = (72.0 * window.scale_factor()).round() as u32;
-    (physical.width.clamp(2, 1280), h.clamp(2, 240))
+    let side_pad = (40.0 * window.scale_factor()).round() as u32;
+    (physical.width.saturating_sub(side_pad).clamp(2, 1280), h.clamp(2, 240))
 }
 
 #[inline]
@@ -408,7 +410,9 @@ impl TimerControl {
         if self.viz_mode == 0 || !self.visible || !self.playing {
             return;
         }
-        let head = self.shared.viz_head.load(Ordering::Relaxed);
+        // Acquire pairs the audio callback's Release head store (output.rs):
+        // a new head must come with the peak slots it indexes.
+        let head = self.shared.viz_head.load(Ordering::Acquire);
         if head == self.last_viz_head {
             return;
         }
