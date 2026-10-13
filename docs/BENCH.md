@@ -534,8 +534,49 @@ Cap for this release: **11,031,024 B** (10.52 MiB, raised from 10,485,760 - see 
 | T4 settings/viz-control | 10,619,904 | 7 | 41 | 2026-10-11 |
 | T5 tap/render/timer | 10,630,144 | 7 | 47 | 2026-10-11 |
 
-Current (T5, 2026-10-11): exe **10,630,144 B** ≤ 11,031,024 **PASS**, release
-warnings **7**, `cargo test` **47**. Budget 10 (visualizer on), the 30-minute
-viz-on soak, and budgets 3/4 with the visualizer on are **not yet measured** —
-pending the controller's live gates; this section will be closed with those
-numbers.
+### v1.2.0 live gates - controller (2026-10-12)
+
+Redirected profile (`%LOCALAPPDATA%` → temp copy), file `test_audio/test.mp3`
+(MPEG-1 L3 44.1 kHz, 10:00 - the same file for every CPU gate;
+`tone48k_60m.mp3` rejected: its 48 kHz content inflates the baseline by
+~1.5 points), unpinned. Evidence (gitignored): `bench_results/v120/`.
+
+Budget 10 (5 x 60 s median, quiet machine, background load ~3%):
+
+| config | median CPU | gate | verdict |
+|---|---|---|---|
+| viz Off (baseline) | 0.88% | - | reference |
+| Line 15 fps | 2.61% | <= 3% | **PASS** |
+| Pulsar 10 fps | 2.56% | <= 3% | **PASS** |
+
+Context kept for the record: the first attempt under ~41% background load
+measured Off 0.96 / Line 2.68 / Pulsar 3.06 (`b10-{off,line,pulsar}/`);
+P-core pinning made both modes worse (HT contention, `b10-*-pinned/`) and was
+rejected as a protocol. One Line run in the loaded batch had a 0.85% tail
+(viz apparently not drawing) - did not recur in the quiet matrix.
+
+| budget | scenario | measured | gate | verdict |
+|---|---|---|---|---|
+| 3 | USS visible playing (viz on, 300 s; quiet-matrix peaks) | 6.56 / 6.82 MB (Off 6.06 MB) | <= 25 MB | **PASS** |
+| 4 | USS minimized 300 s (viz mode seeded on; minimized => tap/timer off) | 4.79 MB | <= 15 MB | **PASS** |
+| 5 | CPU minimized 300 s (unstable ruling stands) | 0.63% | <= 0.5% | info only |
+| 6 | CPU 2x minimized, 60 s CLI | 1.80% | <= 2% | **PASS** |
+| 7 | paused > 10 s, 60 s CLI | 0.00% | 0.0% | **PASS** |
+| 8 | threads idle / playing | 11 / 12 | <= 11 / <= 12 | **PASS** |
+
+Soak: 55.5 min, debug build, Pulsar on, window visible, `QPID_WAKE_LOG` -
+**545 samples, every line `underruns=0`** (`v120/soak-vizon.log`; the formal
+first 30.5 min = 306 samples all zero). test.mp3 hit EOF mid-soak and
+auto-advanced to tone48k_60m; playback never stopped.
+
+Interactive checks (same debug instance, post-soak): viz toggle resizes the
+window 618x547 <-> 618x447 (+/-80 logical at 125% DPI) across
+Off -> Line -> Pulsar -> Off -> Line -> Pulsar; pause freezes `pos_ms` for
+40 s (> the 30 s checkpoint interval) and resume advances it again;
+SC_MINIMIZE drops WS 41 -> 6.9 MB, SC_RESTORE brings the strip back at
+618x547, underruns stay 0 throughout. Screenshot confirms the Pulsar strip
+and label render live.
+
+Measurement notes: winit 0.30.13 never emits `Occluded` on Windows, so
+visible = !minimized; the unexplained CPU decay seen in 300 s viz-on runs
+is avoided by the 60 s gate windows and did not affect any number above.
