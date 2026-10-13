@@ -931,7 +931,14 @@ mod tests {
 
     #[test]
     fn folder_display_last_component() {
-        assert_eq!(folder_display(r"C:\Music\Book One"), "Book One");
+        // Native-form path so the last-component assertion also runs on
+        // Linux CI, where a backslash fixture would be one single component.
+        let native = std::path::Path::new("C:")
+            .join("Music")
+            .join("Book One")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(folder_display(&native), "Book One");
         assert_eq!(folder_display("/home/u/albums"), "albums");
     }
 
